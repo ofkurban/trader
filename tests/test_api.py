@@ -99,3 +99,23 @@ def test_analyze_falls_back_on_llm_timeout(client, monkeypatch):
     body = res.json()
     assert body["used_fallback"] is True
     assert "SETUP:" in body["analysis"]
+
+
+def test_groq_retired_model_switches_to_available_one(monkeypatch):
+    import io
+    import urllib.error
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
+    monkeypatch.setattr(agent, "_groq_model_override", None)
+    used = []
+
+    def fake_post(url, payload, headers=None):
+        used.append(payload["model"])
+        if payload["model"] == "retired-model":
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, io.BytesIO(b"{}"))
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    monkeypatch.setattr(agent, "_http_post_json", fake_post)
+    monkeypatch.setattr(agent, "_available_groq_model", lambda key, exclude: "openai/gpt-oss-120b")
+    assert agent._call_groq_messages([{"role": "user", "content": "hi"}], "retired-model") == "ok"
+    assert used == ["retired-model", "openai/gpt-oss-120b"]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -29,7 +30,7 @@ AGENT_PROVIDERS = {
     },
     "groq": {
         "label": "Groq (free cloud tier)",
-        "default_model": "llama-3.3-70b-versatile",
+        "default_model": "openai/gpt-oss-120b",
         "env_key": "GROQ_API_KEY",
     },
     "gemini": {
@@ -151,7 +152,7 @@ def agent_status() -> dict[str, Any]:
         "recommended_free": [
             {
                 "provider": "groq",
-                "model": "llama-3.3-70b-versatile",
+                "model": "openai/gpt-oss-120b",
                 "why": "Easiest free ChatGPT-style chat — get a free key at console.groq.com",
                 "signup": "https://console.groq.com/keys",
             },
@@ -276,13 +277,49 @@ def _call_groq_messages(messages: list[dict], model: str, api_key: str | None = 
     if not api_key:
         raise RuntimeError("GROQ_API_KEY not set — paste your free key in Stock Chat settings")
 
-    payload = {"model": model, "messages": messages, "temperature": 0.4}
-    result = _http_post_json(
-        "https://api.groq.com/openai/v1/chat/completions",
-        payload,
-        headers={"Authorization": f"Bearer {api_key}"},
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    def complete(model_id: str) -> str:
+        payload = {"model": model_id, "messages": messages, "temperature": 0.4}
+        result = _http_post_json(GROQ_CHAT_URL, payload, headers=headers)
+        return result["choices"][0]["message"]["content"].strip()
+
+    try:
+        return complete(model)
+    except urllib.error.HTTPError as exc:
+        # Groq retires models regularly; switch to one this key can use
+        if exc.code != 404:
+            raise
+        replacement = _available_groq_model(api_key, exclude=model)
+        if not replacement:
+            raise
+        return complete(replacement)
+
+
+GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+# Tried in order when the configured model has been retired
+GROQ_FALLBACK_MODELS = ("openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b")
+_groq_model_override: str | None = None
+
+
+def _available_groq_model(api_key: str, exclude: str) -> str | None:
+    global _groq_model_override
+    if _groq_model_override and _groq_model_override != exclude:
+        return _groq_model_override
+    req = urllib.request.Request(
+        "https://api.groq.com/openai/v1/models",
+        headers={"Authorization": f"Bearer {api_key}", "User-Agent": "Mozilla/5.0 TraderApp/0.1"},
     )
-    return result["choices"][0]["message"]["content"].strip()
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            available = {m["id"] for m in json.loads(resp.read().decode("utf-8"))["data"]}
+    except (OSError, ValueError, KeyError):
+        return None
+    for candidate in GROQ_FALLBACK_MODELS:
+        if candidate in available and candidate != exclude:
+            _groq_model_override = candidate
+            return candidate
+    return None
 
 
 def _call_gemini_messages(

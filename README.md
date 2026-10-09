@@ -73,7 +73,7 @@ Analyzes indicators + news and suggests setup (buy zone, stop, take profit).
 | Provider | Model | Best for |
 |----------|-------|----------|
 | **Ollama** (default) | `llama3.2` or `qwen2.5:7b` | 100% free, private, runs locally |
-| **Groq** | `llama-3.3-70b-versatile` | Free cloud API, fast, strong reasoning |
+| **Groq** | `openai/gpt-oss-120b` | Free cloud API, fast, strong reasoning |
 | **Gemini** | `gemini-2.0-flash` | Free tier, good summaries |
 | **rules** | built-in | No LLM — instant rule-based analysis |
 
