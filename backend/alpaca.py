@@ -35,9 +35,21 @@ class AlpacaError(RuntimeError):
     pass
 
 
+# Accept the names Alpaca's own docs and SDKs use, not just ours
+KEY_VARS = ("ALPACA_API_KEY", "ALPACA_API_KEY_ID", "APCA_API_KEY_ID")
+SECRET_VARS = ("ALPACA_API_SECRET", "ALPACA_SECRET_KEY", "ALPACA_API_SECRET_KEY", "APCA_API_SECRET_KEY")
+
+
+def _first_env(names: tuple[str, ...]) -> str:
+    for name in names:
+        value = (os.getenv(name) or "").strip().strip("\"'")
+        if value:
+            return value
+    return ""
+
+
 def _credentials() -> tuple[str, str] | None:
-    key = (os.getenv("ALPACA_API_KEY") or "").strip()
-    secret = (os.getenv("ALPACA_API_SECRET") or "").strip()
+    key, secret = _first_env(KEY_VARS), _first_env(SECRET_VARS)
     return (key, secret) if key and secret else None
 
 
@@ -162,8 +174,14 @@ def search_assets(query: str, limit: int = 8) -> list[dict]:
         scored.append((rank, len(symbol), symbol, name))
     scored.sort()
     return [
-        {"symbol": s.replace(".", "-"), "name": n, "exchange": "US", "type": "Stock / ETF"}
-        for _, _, s, n in scored[:limit]
+        {
+            "symbol": s.replace(".", "-"),
+            "name": n,
+            "exchange": "US",
+            "type": "Stock / ETF",
+            "symbol_match": rank <= 1,
+        }
+        for rank, _, s, n in scored[:limit]
     ]
 
 

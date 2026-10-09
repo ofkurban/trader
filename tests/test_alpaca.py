@@ -53,7 +53,8 @@ def fake_alpaca(monkeypatch):
 
 def test_disabled_without_both_keys(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "PKTEST")
-    monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
+    for name in alpaca.SECRET_VARS:
+        monkeypatch.delenv(name, raising=False)
     assert not alpaca.enabled()
     assert not alpaca.lists("AAPL")
 
@@ -106,9 +107,38 @@ def test_search_ranks_symbol_then_name(fake_alpaca, monkeypatch):
         {"symbol": "TL0.DE", "name": "Tesla Inc", "exchange": "XETRA", "type": "Equity"}
     ])
     results = search_symbols("tsla")
-    assert [r["symbol"] for r in results][:2] == ["TSLA", "TSLL"]
-    assert results[-1]["symbol"] == "TL0.DE"  # foreign listing appended from Yahoo
-    assert search_symbols("tesla")[0]["symbol"] == "TSLA"
+    # Ticker match first, then Yahoo, then name-only matches (TSLL's name mentions TSLA)
+    assert [r["symbol"] for r in results] == ["TSLA", "TL0.DE", "TSLL"]
+    assert "symbol_match" not in results[0]
+
+
+def test_name_search_prefers_yahoo_relevance(fake_alpaca, monkeypatch):
+    import backend.symbols as symbols
+
+    monkeypatch.setattr(symbols, "_yahoo_search", lambda q, limit: [
+        {"symbol": "TSLA", "name": "Tesla, Inc.", "exchange": "NASDAQ", "type": "Equity"},
+        {"symbol": "TL0.DE", "name": "Tesla Inc", "exchange": "XETRA", "type": "Equity"},
+    ])
+    # "tesla" is a name match only, so Yahoo's ranking leads
+    assert [r["symbol"] for r in search_symbols("tesla")] == ["TSLA", "TL0.DE"]
+
+
+def test_search_works_when_yahoo_is_down(fake_alpaca, monkeypatch):
+    import backend.symbols as symbols
+
+    def down(q, limit):
+        raise RuntimeError("yahoo down")
+
+    monkeypatch.setattr(symbols, "_yahoo_search", down)
+    assert search_symbols("nvidia")[0]["symbol"] == "NVDA"
+
+
+def test_secret_name_aliases(monkeypatch):
+    for name in alpaca.SECRET_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ALPACA_API_KEY", "PKTEST")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", ' "secret" ')
+    assert alpaca._credentials() == ("PKTEST", "secret")
 
 
 def test_asset_outage_backs_off(monkeypatch):

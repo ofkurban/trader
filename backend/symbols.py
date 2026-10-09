@@ -43,20 +43,33 @@ def parse_symbols(raw: str | None) -> list[str]:
 
 @ttl_cache(seconds=3600, maxsize=200)
 def search_symbols(query: str, limit: int = 8) -> list[dict]:
-    """Alpaca's US list first (when configured), then Yahoo for everything else."""
-    # Leave room for a couple of foreign listings from Yahoo
-    results = alpaca.search_assets(query, limit=max(limit - 2, 1))
+    """Merge Alpaca's US list with Yahoo search.
+
+    Order: Alpaca ticker matches ("TSL" -> TSLA), then Yahoo's relevance-ranked
+    results (good at company names and foreign listings), then Alpaca name
+    matches as a fallback when Yahoo is down or thin.
+    """
+    alpaca_hits = alpaca.search_assets(query, limit=limit)
     try:
         yahoo = _yahoo_search(query, limit)
     except Exception:
-        if not results:
+        if not alpaca_hits:
             raise
         yahoo = []
-    seen = {r["symbol"] for r in results}
-    for r in yahoo:
-        if r["symbol"] not in seen and len(results) < limit:
-            results.append(r)
-            seen.add(r["symbol"])
+
+    ordered = (
+        [r for r in alpaca_hits if r["symbol_match"]]
+        + yahoo
+        + [r for r in alpaca_hits if not r["symbol_match"]]
+    )
+    results, seen = [], set()
+    for r in ordered:
+        if r["symbol"] in seen:
+            continue
+        seen.add(r["symbol"])
+        results.append({k: v for k, v in r.items() if k != "symbol_match"})
+        if len(results) == limit:
+            break
     return results
 
 
