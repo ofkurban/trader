@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trader</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script
+    src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"
+    integrity="sha384-OK7vELvjHdhUFi31JYioPIcRHTROLdcDa6ZsNWgvgLaKj+9JqhU0Ad8g4wz3CXjA"
+    crossorigin="anonymous"
+  ></script>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div>
+        <h1>Trader</h1>
+        <p class="subtitle">Any ticker · suggested levels · AI chat</p>
+      </div>
+      <div class="header-actions">
+        <button id="refresh-btn" type="button">Refresh data</button>
+        <span id="last-updated" class="muted"></span>
+      </div>
+    </header>
+
+    <section id="greed-panel" class="greed-panel">
+      <div class="greed-main">
+        <div>
+          <h2>Greedy Risk Index</h2>
+          <p id="greed-hint" class="muted">Fear ↔ Greed for the default semis / memory list</p>
+        </div>
+        <div class="greed-score-wrap">
+          <div id="greed-score" class="greed-score">50</div>
+          <span id="greed-label" class="greed-label neutral">NEUTRAL</span>
+        </div>
+      </div>
+      <div class="greed-meter">
+        <div id="greed-meter-fill" class="greed-meter-fill" style="width: 50%"></div>
+        <div id="greed-meter-marker" class="greed-meter-marker" style="left: 50%"></div>
+      </div>
+      <div class="greed-scale">
+        <span>Extreme Fear</span><span>Fear</span><span>Neutral</span><span>Greed</span><span>Extreme Greed</span>
+      </div>
+      <div id="greed-components" class="greed-components"></div>
+      <p id="greed-disclaimer" class="muted greed-disclaimer"></p>
+    </section>
+
+    <section id="overnight-panel" class="overnight-panel">
+      <div class="overnight-header">
+        <div>
+          <h2>Overnight Asia bias</h2>
+          <p id="overnight-summary" class="muted">Loading KOSDAQ, KOSPI, Korea chips…</p>
+        </div>
+        <span id="overnight-bias" class="overnight-bias mixed">MIXED</span>
+      </div>
+      <div id="overnight-grid" class="overnight-grid"></div>
+      <div class="chip-news-block">
+        <div class="chip-news-header">
+          <h3>Chip sell-off news</h3>
+          <span id="chip-news-tone" class="chip-news-tone mixed">MIXED</span>
+        </div>
+        <p id="chip-news-summary" class="muted"></p>
+        <div id="china-memory-watch" class="china-memory-watch"></div>
+        <div id="chip-news-list" class="chip-news-list"></div>
+      </div>
+      <p id="overnight-tip" class="overnight-tip muted"></p>
+    </section>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <form id="symbol-search" class="symbol-search" autocomplete="off">
+          <input
+            id="symbol-input"
+            type="search"
+            placeholder="Search any ticker or company"
+            aria-label="Search ticker or company"
+            aria-controls="symbol-results"
+          />
+          <div id="symbol-results" class="symbol-results hidden" role="listbox"></div>
+          <p id="search-status" class="muted search-status"></p>
+        </form>
+        <div class="sidebar-head">
+          <h2>Watchlist</h2>
+          <button id="reset-watchlist-btn" type="button" class="link-btn" title="Restore the default list">Reset</button>
+        </div>
+        <div id="watchlist" class="watchlist"></div>
+        <h2 class="sidebar-section-title">Sector headlines</h2>
+        <div id="sector-news" class="sector-news"></div>
+      </aside>
+
+      <main class="main">
+        <div id="empty-state" class="empty-state">
+          <p>Search for any ticker, or pick one from the watchlist, to see its chart and suggested levels.</p>
+        </div>
+
+        <div id="stock-panel" class="stock-panel hidden">
+          <div class="stock-header">
+            <div>
+              <h2 id="stock-title"></h2>
+              <p id="stock-meta" class="muted"></p>
+              <button id="watch-toggle-btn" type="button" class="secondary watch-toggle"></button>
+            </div>
+            <div class="price-block">
+              <span id="stock-price" class="price"></span>
+              <span id="stock-rec" class="rec-badge">HOLD</span>
+              <span id="stock-trend" class="trend-badge"></span>
+            </div>
+          </div>
+
+          <section id="rec-banner" class="rec-banner hold">
+            <div class="rec-banner-main">
+              <span class="rec-label">Recommendation</span>
+              <strong id="rec-action">HOLD</strong>
+              <span id="rec-confidence" class="rec-confidence"></span>
+            </div>
+            <p id="rec-summary" class="rec-summary"></p>
+            <ul id="rec-reasons" class="rec-reasons"></ul>
+          </section>
+
+          <div class="chart-stack">
+            <div id="chart-price" class="chart chart-price"></div>
+            <div id="chart-rsi" class="chart chart-rsi"></div>
+          </div>
+
+          <section class="perf-grid" id="perf-grid">
+            <div class="perf-card">
+              <h3>1 day</h3>
+              <p class="perf-value" id="perf-1d">—</p>
+            </div>
+            <div class="perf-card">
+              <h3>5 days</h3>
+              <p class="perf-value" id="perf-5d">—</p>
+            </div>
+            <div class="perf-card">
+              <h3>1 month</h3>
+              <p class="perf-value" id="perf-1mo">—</p>
+            </div>
+            <div class="perf-card">
+              <h3>3 months</h3>
+              <p class="perf-value" id="perf-3mo">—</p>
+            </div>
+            <div class="perf-card">
+              <h3>6 months</h3>
+              <p class="perf-value" id="perf-6mo">—</p>
+            </div>
+            <div class="perf-card">
+              <h3>1 year</h3>
+              <p class="perf-value" id="perf-1y">—</p>
+            </div>
+          </section>
+
+          <section class="metrics-grid">
+            <div class="metric-card">
+              <h3>RSI (14)</h3>
+              <p class="metric-value" id="metric-rsi"></p>
+              <p class="metric-hint" id="metric-rsi-hint"></p>
+            </div>
+            <div class="metric-card">
+              <h3>SMA200</h3>
+              <p class="metric-value" id="metric-sma200"></p>
+              <p class="metric-hint" id="metric-sma200-hint"></p>
+            </div>
+            <div class="metric-card">
+              <h3>Volume</h3>
+              <p class="metric-value" id="metric-volume"></p>
+              <p class="metric-hint" id="metric-volume-hint"></p>
+            </div>
+            <div class="metric-card">
+              <h3>Trend summary</h3>
+              <p class="metric-value metric-trend" id="metric-trend"></p>
+              <p class="metric-hint">SMA20 · SMA50 · SMA200</p>
+            </div>
+          </section>
+
+          <section class="levels-grid">
+            <div class="level-card buy">
+              <h3>Buy zone</h3>
+              <p class="level-value" id="level-buy"></p>
+              <p class="level-hint">Pullback toward support / SMA20</p>
+            </div>
+            <div class="level-card sell">
+              <h3>Take profit</h3>
+              <p class="level-value" id="level-take-profit"></p>
+              <p class="level-hint" id="level-take-profit-hint">Near 60-day resistance</p>
+            </div>
+            <div class="level-card stop">
+              <h3>Stop loss</h3>
+              <p class="level-value" id="level-stop"></p>
+              <p class="level-hint">Below support (ATR-based)</p>
+            </div>
+            <div class="level-card info">
+              <h3>Risk / reward</h3>
+              <p class="level-value" id="level-rr"></p>
+              <p class="level-hint" id="level-support-resistance"></p>
+            </div>
+          </section>
+
+          <section class="news-section">
+            <h3>Latest news</h3>
+            <div id="news-list" class="news-list"></div>
+          </section>
+
+          <section class="agent-section">
+            <div class="agent-header">
+              <div>
+                <h3>Stock Chat</h3>
+                <p id="agent-status" class="muted"></p>
+              </div>
+              <button id="agent-analyze-btn" type="button" class="secondary">Quick analyze</button>
+            </div>
+
+            <div class="chat-settings">
+              <label>
+                AI provider
+                <select id="chat-provider">
+                  <option value="ollama">Ollama (local — default)</option>
+                  <option value="groq">Groq (free cloud)</option>
+                  <option value="gemini">Gemini (free cloud)</option>
+                  <option value="rules">Rules only (templates)</option>
+                </select>
+              </label>
+              <p class="chat-key-hint muted">API keys stay on the server — set them in <code>.env</code> (see <code>.env.example</code>).</p>
+              <a id="chat-key-link" class="chat-key-link" href="https://ollama.com" target="_blank" rel="noopener">Install Ollama</a>
+            </div>
+
+            <div id="chat-messages" class="chat-messages">
+              <div class="chat-bubble assistant">Keys come from server <code>.env</code>. Pick a provider, then ask anything about this stock.</div>
+            </div>
+            <form id="chat-form" class="chat-form">
+              <input id="chat-input" type="text" placeholder="Ask about this stock…" autocomplete="off" maxlength="2000" />
+              <button id="chat-send-btn" type="submit">Send</button>
+            </form>
+          </section>
+
+          <section class="order-form">
+            <h3>Order plan <span class="muted">(edit before paper trading)</span></h3>
+            <div class="form-row">
+              <label>
+                Limit buy ($)
+                <input type="number" id="input-buy" step="0.01" />
+              </label>
+              <label>
+                Take profit ($)
+                <input type="number" id="input-take-profit" step="0.01" />
+              </label>
+              <label>
+                Stop loss ($)
+                <input type="number" id="input-stop" step="0.01" />
+              </label>
+              <label>
+                Shares
+                <input type="number" id="input-shares" min="1" value="10" />
+              </label>
+            </div>
+            <div class="form-actions">
+              <button id="reset-levels-btn" type="button" class="secondary">Reset to suggested</button>
+              <button id="save-plan-btn" type="button">Save plan (local)</button>
+            </div>
+            <p id="plan-message" class="plan-message"></p>
+          </section>
+
+          <p class="disclaimer">
+            Illustrative levels from Yahoo Finance data — not financial advice.
+            Connect Alpaca paper trading in a later step for real order execution.
+          </p>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
