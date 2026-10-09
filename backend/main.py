@@ -1,3 +1,4 @@
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Literal
@@ -12,6 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from backend import alpaca
 from backend.auth import basic_auth_middleware
 from backend.cache import ttl_cache
 from backend.config import WATCHLIST
@@ -22,7 +24,9 @@ from backend.overnight import fetch_overnight_signals
 from backend.symbols import lookup_name, normalize_symbol, parse_symbols, search_symbols
 from backend.trader_agent import agent_status, analyze_symbol, chat_about_symbol
 
-app = FastAPI(title="Trader", version="0.2.0")
+log = logging.getLogger("trader")
+
+app = FastAPI(title="Trader", version="0.3.0")
 app.middleware("http")(basic_auth_middleware)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
@@ -45,12 +49,23 @@ class ChatRequest(BaseModel):
 
 
 @ttl_cache(seconds=120, maxsize=300)
-def fetch_history(symbol: str, period: str = "1y"):
-    ticker = yf.Ticker(symbol)
-    hist = ticker.history(period=period)
+def fetch_history_with_source(symbol: str, period: str = "1y"):
+    """(history, source): Alpaca for US listings it covers, Yahoo otherwise or on error."""
+    hist, source = None, "yahoo"
+    if alpaca.lists(symbol):
+        try:
+            hist, source = alpaca.history(symbol, period), "alpaca"
+        except alpaca.AlpacaError as exc:
+            log.warning("Alpaca bars failed for %s, using Yahoo: %s", symbol, exc)
+    if hist is None or hist.empty:
+        hist, source = yf.Ticker(symbol).history(period=period), "yahoo"
     if hist.empty:
         raise HTTPException(status_code=404, detail=f"No price data for {symbol}")
-    return hist
+    return hist, source
+
+
+def fetch_history(symbol: str, period: str = "1y"):
+    return fetch_history_with_source(symbol, period)[0]
 
 
 def safe_fetch_news(symbol: str) -> list[dict]:
@@ -63,9 +78,9 @@ def safe_fetch_news(symbol: str) -> list[dict]:
 
 def load_levels(symbol: str, period: str = "1y"):
     """History + computed levels, with 'too little history' reported as a 422."""
-    hist = fetch_history(symbol, period=period)
+    hist, source = fetch_history_with_source(symbol, period)
     try:
-        return hist, compute_levels(hist)
+        return hist, compute_levels(hist), source
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"{symbol} ({period}): {exc}") from exc
 
@@ -90,6 +105,18 @@ def fetch_watchlist_items(symbols: list[str]) -> list[dict]:
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
+
+
+@app.get("/api/data/status")
+def data_status():
+    """Which market-data source is active (never returns key values)."""
+    if not alpaca.enabled():
+        return {"alpaca": "not configured", "fallback": "yahoo"}
+    try:
+        count = len(alpaca.us_assets())
+        return {"alpaca": "ok", "us_symbols": count, "fallback": "yahoo"}
+    except alpaca.AlpacaError as exc:
+        return {"alpaca": "error", "detail": str(exc), "fallback": "yahoo"}
 
 
 # The greed index and overnight panel are built for the semis/memory default
@@ -138,7 +165,7 @@ def get_watchlist(symbols: str | None = None):
 @app.get("/api/stock/{symbol}")
 def get_stock(symbol: str, period: Period = "1y"):
     symbol = normalize_symbol(symbol)
-    hist, levels = load_levels(symbol, period)
+    hist, levels, source = load_levels(symbol, period)
 
     return {
         "symbol": symbol,
@@ -147,6 +174,7 @@ def get_stock(symbol: str, period: Period = "1y"):
         "history": history_to_records(hist),
         "levels": levels,
         "news": safe_fetch_news(symbol),
+        "data_source": source,
     }
 
 
@@ -185,7 +213,7 @@ def get_agent_status():
 @app.post("/api/agent/analyze/{symbol}")
 def run_agent_analysis(symbol: str):
     symbol = normalize_symbol(symbol)
-    _, levels = load_levels(symbol)
+    _, levels, _ = load_levels(symbol)
 
     return analyze_symbol(
         symbol=symbol,
@@ -198,7 +226,7 @@ def run_agent_analysis(symbol: str):
 @app.post("/api/agent/chat/{symbol}")
 def agent_chat(symbol: str, body: ChatRequest):
     symbol = normalize_symbol(symbol)
-    hist, levels = load_levels(symbol)
+    hist, levels, _ = load_levels(symbol)
 
     return chat_about_symbol(
         symbol=symbol,

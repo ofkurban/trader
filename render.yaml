@@ -1,6 +1,6 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
 # New > Blueprint in the Render dashboard, pick this repo, then fill in the
-# two secrets it asks for (GROQ_API_KEY, APP_PASSWORD).
+# secrets it asks for (GROQ_API_KEY, APP_PASSWORD, ALPACA_API_KEY/SECRET).
 services:
   - type: web
     name: trader
@@ -21,4 +21,8 @@ services:
       - key: GROQ_API_KEY
         sync: false
       - key: APP_PASSWORD
+        sync: false
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_API_SECRET
         sync: false

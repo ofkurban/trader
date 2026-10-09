@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import yfinance as yf
 
+from backend import alpaca
 from backend.cache import ttl_cache
 
 CHIP_NEWS_SYMBOLS = [
@@ -107,39 +108,68 @@ def _normalize_article(item: dict, source_symbol: str) -> dict | None:
         return None
 
     provider = content.get("provider") or {}
-    summary = content.get("summary") or content.get("description") or ""
-    text = f"{title} {summary}".lower()
-    is_selloff = bool(SELL_OFF_RE.search(text))
-    is_china_memory = bool(CHINA_MEMORY_RE.search(text))
+    return _article(
+        title=title,
+        summary=content.get("summary") or content.get("description") or "",
+        published=content.get("pubDate"),
+        publisher=provider.get("displayName") or "Yahoo Finance",
+        url=_article_url(content),
+        kind=content.get("contentType", "STORY"),
+        source_symbol=source_symbol,
+    )
 
+
+def _normalize_alpaca_article(item: dict, source_symbol: str) -> dict | None:
+    title = item.get("headline")
+    if not title:
+        return None
+    source = item.get("source") or "Benzinga"
+    return _article(
+        title=title,
+        summary=item.get("summary") or "",
+        published=item.get("created_at"),
+        publisher=source.title() if source.islower() else source,
+        url=item.get("url"),
+        kind="STORY",
+        source_symbol=source_symbol,
+    )
+
+
+def _article(*, title, summary, published, publisher, url, kind, source_symbol) -> dict:
+    text = f"{title} {summary}".lower()
     return {
         "title": title,
         "summary": summary,
-        "published": _parse_pub_date(content.get("pubDate")),
-        "publisher": provider.get("displayName") or "Yahoo Finance",
-        "url": _article_url(content),
-        "type": content.get("contentType", "STORY"),
+        "published": _parse_pub_date(published),
+        "publisher": publisher,
+        "url": url,
+        "type": kind,
         "source_symbol": source_symbol,
-        "is_selloff": is_selloff,
-        "is_china_memory": is_china_memory,
+        "is_selloff": bool(SELL_OFF_RE.search(text)),
+        "is_china_memory": bool(CHINA_MEMORY_RE.search(text)),
     }
 
 
 @ttl_cache(seconds=300)
 def _raw_news(symbol: str) -> list[dict]:
-    return yf.Ticker(symbol).news or []
+    """Normalized articles: Alpaca (Benzinga) for US listings, else Yahoo.
+
+    Falls back to Yahoo if Alpaca errors or has nothing for the symbol.
+    """
+    if alpaca.lists(symbol):
+        try:
+            items = alpaca.news(symbol, limit=12)
+            articles = [a for a in (_normalize_alpaca_article(i, symbol) for i in items) if a]
+            if articles:
+                return articles
+        except alpaca.AlpacaError:
+            pass
+    raw = yf.Ticker(symbol).news or []
+    return [a for a in (_normalize_article(i, symbol) for i in raw) if a]
 
 
 def fetch_news(symbol: str, limit: int = 8) -> list[dict]:
-    raw = _raw_news(symbol)
-    articles = []
-
-    for item in raw[:limit]:
-        article = _normalize_article(item, symbol)
-        if article:
-            articles.append(article)
-
-    return articles
+    return _raw_news(symbol)[:limit]
 
 
 def fetch_chip_news(limit: int = 12) -> dict:
@@ -156,11 +186,8 @@ def fetch_chip_news(limit: int = 12) -> dict:
     with ThreadPoolExecutor(max_workers=len(CHIP_NEWS_SYMBOLS)) as pool:
         raw_by_symbol = list(pool.map(safe_raw_news, CHIP_NEWS_SYMBOLS))
 
-    for symbol, raw in zip(CHIP_NEWS_SYMBOLS, raw_by_symbol):
-        for item in raw[:6]:
-            article = _normalize_article(item, symbol)
-            if not article:
-                continue
+    for symbol_articles in raw_by_symbol:
+        for article in symbol_articles[:6]:
             key = article["title"].strip().lower()
             if key in seen:
                 continue

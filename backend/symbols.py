@@ -7,6 +7,7 @@ import re
 import yfinance as yf
 from fastapi import HTTPException
 
+from backend import alpaca
 from backend.cache import ttl_cache
 from backend.config import SYMBOL_NAMES, WATCHLIST
 
@@ -42,6 +43,24 @@ def parse_symbols(raw: str | None) -> list[str]:
 
 @ttl_cache(seconds=3600, maxsize=200)
 def search_symbols(query: str, limit: int = 8) -> list[dict]:
+    """Alpaca's US list first (when configured), then Yahoo for everything else."""
+    # Leave room for a couple of foreign listings from Yahoo
+    results = alpaca.search_assets(query, limit=max(limit - 2, 1))
+    try:
+        yahoo = _yahoo_search(query, limit)
+    except Exception:
+        if not results:
+            raise
+        yahoo = []
+    seen = {r["symbol"] for r in results}
+    for r in yahoo:
+        if r["symbol"] not in seen and len(results) < limit:
+            results.append(r)
+            seen.add(r["symbol"])
+    return results
+
+
+def _yahoo_search(query: str, limit: int) -> list[dict]:
     quotes = yf.Search(query, max_results=limit * 2, news_count=0).quotes or []
     results = []
     for q in quotes:
@@ -60,7 +79,7 @@ def search_symbols(query: str, limit: int = 8) -> list[dict]:
 
 @ttl_cache(seconds=86400, maxsize=500)
 def _yahoo_name(symbol: str) -> str:
-    for result in search_symbols(symbol):
+    for result in _yahoo_search(symbol, 8):
         if result["symbol"].upper() == symbol:
             return result["name"]
     return symbol
@@ -69,6 +88,9 @@ def _yahoo_name(symbol: str) -> str:
 def lookup_name(symbol: str) -> str:
     if symbol in SYMBOL_NAMES:
         return SYMBOL_NAMES[symbol]
+    name = alpaca.asset_name(symbol)
+    if name:
+        return name
     try:
         return _yahoo_name(symbol)
     except Exception:

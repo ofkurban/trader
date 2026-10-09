@@ -647,7 +647,7 @@ function renderStock(data) {
   els.stockPanel.classList.remove("hidden");
 
   els.stockTitle.textContent = `${data.symbol} — ${data.name}`;
-  els.stockMeta.textContent = `SMA20 ${formatMoney(data.levels.sma20)} · SMA50 ${data.levels.sma50 ? formatMoney(data.levels.sma50) : "n/a"} · SMA200 ${data.levels.sma200 ? formatMoney(data.levels.sma200) : "n/a"} · ATR14 ${formatMoney(data.levels.atr14)}`;
+  els.stockMeta.textContent = `SMA20 ${formatMoney(data.levels.sma20)} · SMA50 ${data.levels.sma50 ? formatMoney(data.levels.sma50) : "n/a"} · SMA200 ${data.levels.sma200 ? formatMoney(data.levels.sma200) : "n/a"} · ATR14 ${formatMoney(data.levels.atr14)} · Data: ${data.data_source === "alpaca" ? "Alpaca" : "Yahoo"}`;
   els.stockPrice.textContent = formatMoney(data.levels.price);
   els.stockTrend.textContent = `${data.levels.trend_vs_sma20} SMA20 · ${data.levels.trend_vs_sma50} SMA50 · ${data.levels.trend_vs_sma200} SMA200 · RSI ${data.levels.rsi14 ?? "—"}`;
   els.stockTrend.className = `trend-badge chip ${data.levels.trend_vs_sma20}`;

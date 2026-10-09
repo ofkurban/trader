@@ -17,7 +17,8 @@ def client(monkeypatch):
         {"Open": close, "High": close + 1, "Low": close - 1, "Close": close, "Volume": 1e6},
         index=idx,
     )
-    monkeypatch.setattr(main, "fetch_history", lambda symbol, period="1y": hist)
+    monkeypatch.setattr(main, "fetch_history_with_source", lambda symbol, period="1y": (hist, "yahoo"))
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.setattr(main, "fetch_news", lambda symbol, limit=8: [])
     monkeypatch.setattr(main, "lookup_name", lambda symbol: f"{symbol} Inc")
     monkeypatch.delenv("APP_PASSWORD", raising=False)
