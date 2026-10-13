@@ -45,6 +45,7 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/watchlist` | All watchlist symbols with levels |
+| `GET /api/early-signals[?refresh=true]` | Top 10 early-signal stocks (cached 1 h) |
 | `GET /api/stock/{symbol}?period=1y` | History + levels for one symbol (`3mo`, `6mo`, `1y`, `2y`, `5y`, `ytd`, `max`) |
 | `POST /api/agent/chat/{symbol}` | Stock chat (used by the **Analyze setup** button) |
 | `POST /api/agent/analyze/{symbol}` | One-shot structured setup analysis |
@@ -114,6 +115,46 @@ list, saved in this browser; **Reset** restores the default. The Greedy Risk
 Index and Overnight panels always use the default semis/memory list in
 `backend/config.py`.
 
+## Signal ladder + investment system
+
+Each stock page shows two panels under the recommendation:
+
+- **Signal ladder — the price to go in at.** Six rungs (TRIM MORE, TRIM, HOLD,
+  BUY A LITTLE, BUY, BUY A LOT) centred on the SMA50 and spaced 2× ATR apart
+  (at least 2% of price), with today's price marked on its rung. The Early
+  signals cards show the same rung.
+- **Investment system.** *Is today the right day?* checks the market (SPY vs
+  its 50-day), chasing (today < +3%), RSI, earnings within 5 days and heavy
+  selling volume. *Is the ladder right?* checks the long-term trend (SMA200),
+  the stop, buy-zone risk/reward and data freshness.
+
+## Early signals tab
+
+The **Early signals · Top 10** tab screens ~225 liquid US stocks (a built-in
+list plus Yahoo's growth / undervalued / most-active screens) for ten signals
+and ranks them by how many line up (the earnings catalyst counts half, since
+nearly every stock reports within three months):
+
+| Signal | Rule |
+|--------|------|
+| Estimates rising | Analysts' upward EPS revisions in 30 days outnumber cuts (≥3 up, 2:1), or FY estimate +2% |
+| Insider buying | 2+ insiders made open-market purchases in 90 days (Form 4) |
+| Unusual volume | 5-day volume ≥1.5× the prior 50 days while price moved <5% in 10 days |
+| Catalyst soon | Earnings report within ~3 months |
+| Relative strength | 1-month return beats its sector ETF by 3+ points (or rose while the sector fell) |
+| Growth at a discount | Revenue YoY growth expected to speed up this quarter, forward P/E below sector peers |
+| Quiet accumulation | Up-day volume ≥1.3× down-day volume over 50 days |
+| Analyst upgrades | 2+ upgrades or price-target raises in 30 days, more than cuts |
+| Earnings-beat streak | Beat EPS estimates in each of the last 4 quarters |
+| Shorts covering | Shares sold short down 10%+ vs the prior month |
+
+Stocks up more than 30% in the last month are excluded. Prices for all stocks
+come from one batched download; the 45 best volume / relative-strength setups
+get the full fundamentals check. Results are cached for an hour (**Rescan**
+forces a new run, ~10–60 s). Yahoo only knows earnings dates, so FDA decisions,
+launches and index additions aren't detected — **Copy AI research prompt**
+copies a dated research prompt for an AI with web search.
+
 ## Deploy free (Render)
 
 1. Push this folder to a GitHub repo (private is fine). `.env` is git-ignored,
@@ -123,7 +164,7 @@ Index and Overnight panels always use the default semis/memory list in
 3. When asked, set:
    - `APP_PASSWORD` — the password for the site (browser login prompt; any username)
    - `GROQ_API_KEY` — your Groq key
-4. Open `https://<your-service>.onrender.com`.
+4. Open the deployed site: [https://trader-88ql.onrender.com](https://trader-88ql.onrender.com)
 
 Free tier notes: the service sleeps after ~15 min without visits and takes
 ~30–60 s to wake on the next one. Yahoo Finance sometimes rate-limits cloud

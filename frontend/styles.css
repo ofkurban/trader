@@ -1329,3 +1329,383 @@ button:disabled {
   width: 100%;
   box-sizing: border-box;
 }
+
+/* ---- Tabs ---- */
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.tabs .tab {
+  background: none;
+  color: var(--muted);
+  border-radius: 8px 8px 0 0;
+  border-bottom: 2px solid transparent;
+  padding: 0.6rem 1rem;
+}
+
+.tabs .tab:hover {
+  color: var(--text);
+}
+
+.tabs .tab.active {
+  color: var(--text);
+  border-bottom-color: var(--blue);
+}
+
+/* ---- Early signals ---- */
+
+.signals-view {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+}
+
+.signals-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.signals-head h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
+}
+
+.signals-head p {
+  margin: 0;
+  max-width: 60ch;
+}
+
+.signals-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.signals-legend,
+.signal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.signals-legend {
+  margin: 0.9rem 0 0.25rem;
+}
+
+.signals-status {
+  min-height: 1.2em;
+}
+
+.signal-chip {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: help;
+}
+
+.signal-chip.hit {
+  color: var(--green);
+  border-color: rgba(61, 214, 140, 0.45);
+  background: rgba(61, 214, 140, 0.12);
+  opacity: 1;
+}
+
+.signals-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
+  gap: 0.75rem;
+}
+
+.signal-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.signal-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.signal-rank {
+  color: var(--muted);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.signal-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.signal-name .muted {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.signal-ticker.link-btn {
+  color: var(--blue);
+  font-size: 1.05rem;
+  font-weight: 700;
+  padding: 0;
+  text-align: left;
+}
+
+.signal-price {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+}
+
+.signal-price .up { color: var(--green); }
+.signal-price .down { color: var(--red); }
+.signal-price .flat { color: var(--muted); }
+
+.signal-price span + span {
+  font-size: 0.78rem;
+}
+
+.signal-count {
+  font-weight: 800;
+  font-size: 1.1rem;
+  color: var(--green);
+  background: rgba(61, 214, 140, 0.12);
+  border-radius: 8px;
+  padding: 0.25rem 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.signal-details {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.signal-line {
+  margin: 0;
+  font-size: 0.85rem;
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.signal-tag {
+  flex: none;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 6px;
+}
+
+.signal-tag.catalyst {
+  color: var(--blue);
+  background: rgba(89, 194, 255, 0.14);
+}
+
+.signal-tag.risk {
+  color: var(--yellow);
+  background: rgba(255, 204, 102, 0.14);
+}
+
+.signals-footer {
+  margin-top: 0.9rem;
+}
+
+@media (max-width: 560px) {
+  .tabs .tab {
+    padding: 0.55rem 0.7rem;
+    font-size: 0.85rem;
+  }
+}
+
+/* ---- Signal ladder + investment system ---- */
+
+.system-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.system-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+  min-width: 0;
+}
+
+.system-kicker {
+  margin: 0;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.system-title {
+  margin: 0.15rem 0 0.1rem;
+  font-size: 1.15rem;
+}
+
+.ladder-title { color: var(--blue); }
+.system-title-alt { color: #ff9d5c; }
+
+.ladder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.75rem;
+}
+
+.rung {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 8px;
+  border-left: 4px solid var(--muted);
+  background: rgba(139, 156, 179, 0.1);
+  opacity: 0.6;
+}
+
+.rung.sell {
+  border-left-color: var(--red);
+  background: rgba(240, 113, 120, 0.12);
+}
+
+.rung.buy {
+  border-left-color: var(--green);
+  background: rgba(61, 214, 140, 0.12);
+}
+
+.rung.current {
+  opacity: 1;
+  outline: 2px solid currentColor;
+}
+
+.rung.current.buy { color: var(--green); }
+.rung.current.sell { color: var(--red); }
+.rung.current.hold { color: var(--muted); }
+
+.rung-label {
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  min-width: 7.5rem;
+}
+
+.rung-range {
+  flex: 1;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rung-price {
+  font-weight: 800;
+  font-size: 0.85rem;
+  color: var(--yellow);
+  border: 2px solid var(--yellow);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.system-question {
+  margin-top: 0.85rem;
+}
+
+.system-question-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-weight: 600;
+}
+
+.verdict {
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+}
+
+.verdict.go { color: var(--green); background: rgba(61, 214, 140, 0.15); }
+.verdict.caution { color: var(--yellow); background: rgba(255, 204, 102, 0.15); }
+.verdict.wait { color: var(--red); background: rgba(240, 113, 120, 0.15); }
+
+.check-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+
+.check-list li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.check-icon {
+  flex: none;
+  font-weight: 800;
+  width: 1rem;
+}
+
+.check-list li.pass .check-icon { color: var(--green); }
+.check-list li.fail .check-icon { color: var(--red); }
+
+.ladder-chip {
+  font-size: 0.7rem;
+  font-weight: 800;
+  white-space: nowrap;
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  color: var(--muted);
+  background: rgba(139, 156, 179, 0.15);
+}
+
+.ladder-chip.buy { color: var(--green); background: rgba(61, 214, 140, 0.12); }
+.ladder-chip.sell { color: var(--red); background: rgba(240, 113, 120, 0.12); }
+
+@media (max-width: 560px) {
+  .rung-label { min-width: 6.5rem; font-size: 0.85rem; }
+}
+
+.ladder-basis {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+}
+.verdict.hold { color: var(--muted); background: rgba(139, 156, 179, 0.15); }

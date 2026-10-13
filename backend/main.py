@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Literal
@@ -17,7 +18,9 @@ from backend import alpaca
 from backend.auth import basic_auth_middleware
 from backend.cache import ttl_cache
 from backend.config import WATCHLIST
+from backend.early_signals import scan as scan_early_signals
 from backend.greed_index import compute_greedy_risk_index
+from backend.ladder import compute_system
 from backend.levels import compute_levels, compute_price_stats, history_to_records
 from backend.news import fetch_chip_news, fetch_news
 from backend.overnight import fetch_overnight_signals
@@ -74,6 +77,37 @@ def safe_fetch_news(symbol: str) -> list[dict]:
         return fetch_news(symbol)
     except Exception:
         return []
+
+
+@ttl_cache(seconds=6 * 3600, maxsize=300)
+def next_earnings_date(symbol: str) -> date | None:
+    try:
+        dates = (yf.Ticker(symbol).calendar or {}).get("Earnings Date") or []
+    except Exception:
+        return None
+    upcoming = sorted(d for d in dates if isinstance(d, date) and d >= date.today())
+    return upcoming[0] if upcoming else None
+
+
+def market_levels() -> dict | None:
+    """SPY levels for the 'right day' market check; optional context."""
+    try:
+        return compute_levels(fetch_history("SPY"))
+    except Exception:
+        return None
+
+
+def build_system(symbol: str, hist, levels: dict) -> dict | None:
+    try:
+        return compute_system(
+            levels,
+            market=market_levels(),
+            earnings_date=next_earnings_date(symbol),
+            last_bar=hist.index[-1].date(),
+        )
+    except Exception:
+        log.exception("Ladder/system failed for %s", symbol)
+        return None
 
 
 def load_levels(symbol: str, period: str = "1y"):
@@ -144,6 +178,18 @@ def get_overnight():
     return overnight
 
 
+@app.get("/api/early-signals")
+def get_early_signals(refresh: bool = False):
+    """Top 10 stocks by how many early 'move up' signals line up (cached 1 h)."""
+    if refresh:
+        scan_early_signals.cache_clear()
+    try:
+        return scan_early_signals()
+    except Exception as exc:
+        log.exception("Early-signals scan failed")
+        raise HTTPException(status_code=502, detail=f"Early-signals scan failed: {exc}") from exc
+
+
 @app.get("/api/news/chips")
 def get_chip_news(limit: int = 12):
     return fetch_chip_news(limit=limit)
@@ -173,6 +219,7 @@ def get_stock(symbol: str, period: Period = "1y"):
         "period": period,
         "history": history_to_records(hist),
         "levels": levels,
+        "system": build_system(symbol, hist, levels),
         "news": safe_fetch_news(symbol),
         "data_source": source,
     }

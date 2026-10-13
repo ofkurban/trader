@@ -24,6 +24,12 @@
       </div>
     </header>
 
+    <nav class="tabs" role="tablist" aria-label="Views">
+      <button type="button" class="tab active" role="tab" id="tab-dashboard" data-view="dashboard" aria-selected="true" aria-controls="view-dashboard">Dashboard</button>
+      <button type="button" class="tab" role="tab" id="tab-signals" data-view="signals" aria-selected="false" aria-controls="view-signals">Early signals · Top 10</button>
+    </nav>
+
+    <div id="view-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
     <section id="greed-panel" class="greed-panel">
       <div class="greed-main">
         <div>
@@ -116,6 +122,34 @@
             </div>
             <p id="rec-summary" class="rec-summary"></p>
             <ul id="rec-reasons" class="rec-reasons"></ul>
+          </section>
+
+          <section id="system-panel" class="system-grid hidden">
+            <div class="system-card">
+              <p class="system-kicker">// 01</p>
+              <h3 class="system-title ladder-title">Signal ladder</h3>
+              <p class="muted">The price to go in at</p>
+              <div id="ladder" class="ladder"></div>
+              <p id="ladder-basis" class="muted ladder-basis"></p>
+            </div>
+            <div class="system-card">
+              <p class="system-kicker">// 02</p>
+              <h3 class="system-title system-title-alt">Investment system</h3>
+              <div class="system-question">
+                <div class="system-question-head">
+                  <span>Is today the right day?</span>
+                  <span id="day-verdict" class="verdict"></span>
+                </div>
+                <ul id="day-checks" class="check-list"></ul>
+              </div>
+              <div class="system-question">
+                <div class="system-question-head">
+                  <span>Is the ladder right?</span>
+                  <span id="ladder-verdict" class="verdict"></span>
+                </div>
+                <ul id="ladder-checks" class="check-list"></ul>
+              </div>
+            </div>
           </section>
 
           <div class="chart-stack">
@@ -267,6 +301,33 @@
         </div>
       </main>
     </div>
+    </div>
+
+    <section id="view-signals" class="signals-view hidden" role="tabpanel" aria-labelledby="tab-signals">
+      <div class="signals-head">
+        <div>
+          <h2>Early signals — Top 10</h2>
+          <p class="muted">
+            Stocks where several early "move up" signals line up, ranked by how many agree.
+            Stocks already up more than 30% in the last month are excluded.
+          </p>
+        </div>
+        <div class="signals-actions">
+          <button id="signals-refresh-btn" type="button" class="secondary">Rescan</button>
+          <button id="signals-prompt-btn" type="button" class="secondary" title="Copy the research prompt for an AI with web search">Copy AI research prompt</button>
+        </div>
+      </div>
+      <div id="signals-legend" class="signals-legend"></div>
+      <p id="signals-status" class="muted signals-status"></p>
+      <div id="signals-list" class="signals-list"></div>
+      <p id="signals-footer" class="muted signals-footer"></p>
+      <p class="disclaimer">
+        Screened from Yahoo Finance data: analyst estimate revisions, Form 4 insider purchases,
+        volume, earnings dates, sector ETFs and forward P/E. Yahoo only lists earnings dates, so
+        FDA decisions, product launches and index additions are not detected — use the AI research
+        prompt for those. Not financial advice.
+      </p>
+    </section>
   </div>
 
   <script src="/static/app.js"></script>

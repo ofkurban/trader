@@ -638,6 +638,55 @@ function updateRecommendation(levels) {
     .join("");
 }
 
+function rungRange(rung) {
+  if (rung.high == null) return `above ${formatMoney(rung.low)}`;
+  if (rung.low == null) return `below ${formatMoney(rung.high)}`;
+  return `${formatMoney(rung.low)} – ${formatMoney(rung.high)}`;
+}
+
+function renderChecks(el, checks) {
+  el.innerHTML = checks
+    .map(
+      (c) => `<li class="${c.ok ? "pass" : "fail"}">
+        <span class="check-icon" aria-hidden="true">${c.ok ? "✓" : "✕"}</span>
+        <span><strong>${escapeHtml(c.label)}</strong> <span class="muted">${escapeHtml(c.detail)}</span></span>
+      </li>`,
+    )
+    .join("");
+}
+
+function renderSystem(system, price) {
+  const panel = document.getElementById("system-panel");
+  if (!system) {
+    panel.classList.add("hidden");
+    return;
+  }
+  panel.classList.remove("hidden");
+  const { ladder, day, ladder_check: trust } = system;
+  document.getElementById("ladder").innerHTML = ladder.rungs
+    .map((r) => {
+      const here = r.key === ladder.current;
+      return `<div class="rung ${r.side} ${here ? "current" : ""}">
+        <span class="rung-label">${escapeHtml(r.label)}</span>
+        <span class="rung-range">${rungRange(r)}</span>
+        ${here ? `<span class="rung-price">${formatMoney(price)}</span>` : ""}
+      </div>`;
+    })
+    .join("");
+  document.getElementById("ladder-basis").textContent =
+    `Centred on ${ladder.anchor_name} ${formatMoney(ladder.anchor)}, rungs ${formatMoney(ladder.step)} apart (2× ATR)`;
+
+  const dayVerdict = document.getElementById("day-verdict");
+  dayVerdict.textContent = day.text;
+  dayVerdict.className = `verdict ${day.status}`;
+  renderChecks(document.getElementById("day-checks"), day.checks);
+
+  const ladderVerdict = document.getElementById("ladder-verdict");
+  ladderVerdict.textContent = trust.text;
+  ladderVerdict.className = `verdict ${trust.status}`;
+  renderChecks(document.getElementById("ladder-checks"), trust.checks);
+}
+
 function renderStock(data) {
   const symbolChanged = data.symbol !== currentSymbol;
   currentSymbol = data.symbol;
@@ -653,6 +702,7 @@ function renderStock(data) {
   els.stockTrend.className = `trend-badge chip ${data.levels.trend_vs_sma20}`;
 
   updateRecommendation(data.levels);
+  renderSystem(data.system, data.levels.price);
   updatePerformance(data.levels);
   updateMetricCards(data.levels);
   updateLevelCards(data.levels);
@@ -1170,7 +1220,169 @@ els.symbolSearch.addEventListener("submit", (e) => {
   }
 });
 
+// ---- Tabs ----
+
+const views = { dashboard: "view-dashboard", signals: "view-signals" };
+
+function showView(name) {
+  if (!views[name]) name = "dashboard";
+  for (const [key, id] of Object.entries(views)) {
+    document.getElementById(id).classList.toggle("hidden", key !== name);
+    const tab = document.getElementById(`tab-${key}`);
+    tab.classList.toggle("active", key === name);
+    tab.setAttribute("aria-selected", String(key === name));
+  }
+  if (name === "signals" && !signalsLoaded) loadSignals();
+}
+
+document.querySelectorAll(".tab").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    history.replaceState(null, "", tab.dataset.view === "dashboard" ? location.pathname : `#${tab.dataset.view}`);
+    showView(tab.dataset.view);
+  });
+});
+
+window.addEventListener("hashchange", () => showView(location.hash.slice(1)));
+
+// ---- Early signals ----
+
+const signalsEls = {
+  legend: document.getElementById("signals-legend"),
+  status: document.getElementById("signals-status"),
+  list: document.getElementById("signals-list"),
+  footer: document.getElementById("signals-footer"),
+  refreshBtn: document.getElementById("signals-refresh-btn"),
+  promptBtn: document.getElementById("signals-prompt-btn"),
+};
+
+const SIGNAL_HELP = {
+  revisions: "Analysts raised earnings estimates in the last 30 days",
+  insiders: "2+ insiders bought shares on the open market in the last 90 days",
+  volume: "Volume 1.5× normal while price moved less than 5% in 10 days",
+  catalyst: "Earnings report within the next 3 months",
+  strength: "Beat its sector ETF by 3+ points over the last month (or rose while it fell)",
+  value: "Revenue growth speeding up while forward P/E is below sector peers",
+  accumulation: "Up-day volume at least 1.3× down-day volume over 50 days",
+  upgrades: "2+ analyst upgrades or price-target raises in 30 days, more than cuts",
+  beats: "Beat EPS estimates in each of the last 4 quarters",
+  shorts: "Shares sold short fell 10%+ vs the prior month",
+};
+
+let signalsLoaded = false;
+let signalsSeq = 0;
+
+function renderSignals(data) {
+  const labels = Object.fromEntries(data.signals.map((s) => [s.key, s.label]));
+  signalsEls.legend.innerHTML = data.signals
+    .map((s) => `<span class="signal-chip hit" title="${escapeHtml(SIGNAL_HELP[s.key] || "")}">${escapeHtml(s.label)}</span>`)
+    .join("");
+
+  if (!data.top.length) {
+    signalsEls.list.innerHTML = `<p class="muted">No candidates passed the screen right now.</p>`;
+  } else {
+    signalsEls.list.innerHTML = data.top
+      .map((r, i) => {
+        const chips = data.signals
+          .map(({ key }) => {
+            const s = r.signals[key];
+            return `<span class="signal-chip ${s.hit ? "hit" : ""}" title="${escapeHtml(s.detail)}">${escapeHtml(labels[key])}</span>`;
+          })
+          .join("");
+        const details = data.signals
+          .filter(({ key }) => key !== "catalyst" && r.signals[key].hit)
+          .map(({ key }) => `<li><strong>${escapeHtml(labels[key])}:</strong> ${escapeHtml(r.signals[key].detail)}</li>`)
+          .join("");
+        return `
+          <article class="signal-card">
+            <div class="signal-card-head">
+              <span class="signal-rank">#${i + 1}</span>
+              <div class="signal-name">
+                <button type="button" class="link-btn signal-ticker" data-symbol="${escapeHtml(r.symbol)}">${escapeHtml(r.symbol)}</button>
+                <span class="muted">${escapeHtml(r.name)}${r.sector ? ` · ${escapeHtml(r.sector)}` : ""}</span>
+              </div>
+              <div class="signal-price">
+                <span>${formatMoney(r.price)}</span>
+                <span class="${pctClass(r.ret_1m)}">${formatPct(r.ret_1m == null ? null : r.ret_1m * 100)} 1M</span>
+              </div>
+              ${r.ladder ? `<span class="ladder-chip ${r.ladder.side}" title="Signal ladder rung for today's price">${escapeHtml(r.ladder.label)}</span>` : ""}
+              <span class="signal-count" title="Signals lined up (the catalyst counts half when ranking)">${r.signal_count}/${data.signals.length}</span>
+            </div>
+            <div class="signal-chips">${chips}</div>
+            <ul class="signal-details">${details}</ul>
+            <p class="signal-line"><span class="signal-tag catalyst">Catalyst</span>${escapeHtml(r.catalyst || "None found in the next 3 months")}</p>
+            <p class="signal-line"><span class="signal-tag risk">Biggest risk</span>${escapeHtml(r.risk)}</p>
+          </article>`;
+      })
+      .join("");
+    signalsEls.list.querySelectorAll(".signal-ticker").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        history.replaceState(null, "", location.pathname);
+        showView("dashboard");
+        openStock(btn.dataset.symbol);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    });
+  }
+
+  const when = new Date(data.generated_at).toLocaleString();
+  const hot = data.excluded_hot.length ? ` Excluded (up >30% in a month): ${data.excluded_hot.join(", ")}.` : "";
+  signalsEls.footer.textContent =
+    `Scanned ${data.scanned} liquid US stocks, deep-checked the ${data.deep_checked} with the best volume / relative-strength setups. ` +
+    `Updated ${when}; results are cached for an hour.${hot}`;
+}
+
+async function loadSignals(refresh = false) {
+  const seq = ++signalsSeq;
+  signalsLoaded = true;
+  signalsEls.refreshBtn.disabled = true;
+  signalsEls.status.textContent = "Scanning ~200 stocks for early signals… this can take up to a minute.";
+  if (refresh) signalsEls.list.innerHTML = "";
+  try {
+    const data = await fetchJson(`${API}/early-signals${refresh ? "?refresh=true" : ""}`);
+    if (seq !== signalsSeq) return;
+    signalsEls.status.textContent = "";
+    renderSignals(data);
+  } catch (err) {
+    if (seq !== signalsSeq) return;
+    signalsLoaded = false;
+    signalsEls.status.textContent = `Scan failed: ${err.message}`;
+  } finally {
+    if (seq === signalsSeq) signalsEls.refreshBtn.disabled = false;
+  }
+}
+
+function researchPrompt() {
+  const today = new Date().toISOString().slice(0, 10);
+  return `Today is ${today}. You are an equity research analyst. Search the web and find 10 stocks
+showing early signs of a potential move up, BEFORE it is widely known.
+
+Look for:
+1. Upward earnings estimate revisions in the last 30 days
+2. Insider buying (multiple insiders, open-market purchases)
+3. Unusual volume with price still flat or consolidating
+4. A specific catalyst in the next 1–3 months (with date) — earnings, FDA decision, product launch, index addition
+5. Relative strength vs. its sector
+
+For each stock: ticker, which signals it shows, the catalyst + date,
+and the biggest risk. Rank them by how many signals line up.
+Exclude stocks already up more than 30% in the last month.
+Only use sources from the last 30 days and cite them.`;
+}
+
+signalsEls.refreshBtn.addEventListener("click", () => loadSignals(true));
+signalsEls.promptBtn.addEventListener("click", async () => {
+  const original = "Copy AI research prompt";
+  try {
+    await navigator.clipboard.writeText(researchPrompt());
+    signalsEls.promptBtn.textContent = "Copied ✓";
+  } catch {
+    window.prompt("Copy this prompt:", researchPrompt());
+  }
+  setTimeout(() => (signalsEls.promptBtn.textContent = original), 2000);
+});
+
 async function init() {
+  showView(location.hash.slice(1));
   try {
     const [items] = await Promise.all([
       loadWatchlist(),
