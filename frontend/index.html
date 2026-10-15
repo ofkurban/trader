@@ -28,6 +28,7 @@
       <button type="button" class="tab active" role="tab" id="tab-dashboard" data-view="dashboard" aria-selected="true" aria-controls="view-dashboard">Dashboard</button>
       <button type="button" class="tab" role="tab" id="tab-signals" data-view="signals" aria-selected="false" aria-controls="view-signals">Early signals · Top 10</button>
       <button type="button" class="tab" role="tab" id="tab-backtest" data-view="backtest" aria-selected="false" aria-controls="view-backtest">Backtest</button>
+      <button type="button" class="tab" role="tab" id="tab-journal" data-view="journal" aria-selected="false" aria-controls="view-journal">Journal</button>
     </nav>
 
     <div id="view-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
@@ -288,9 +289,30 @@
                 <input type="number" id="input-shares" min="1" value="10" />
               </label>
             </div>
+            <div class="form-row sizing-row">
+              <label>
+                Account size ($)
+                <input type="number" id="input-account" min="0" step="100" placeholder="e.g. 25000" />
+              </label>
+              <label>
+                Risk per trade (%)
+                <input type="number" id="input-risk-pct" min="0.1" max="10" step="0.1" value="1" />
+              </label>
+              <label>
+                Entry date
+                <input type="date" id="input-entry-date" />
+              </label>
+              <label class="notes-label">
+                Notes (why this trade?)
+                <input type="text" id="input-notes" maxlength="500" placeholder="Setup, reason, feelings…" />
+              </label>
+            </div>
+            <p id="sizing-info" class="sizing-info muted"></p>
             <div class="form-actions">
               <button id="reset-levels-btn" type="button" class="secondary">Reset to suggested</button>
-              <button id="save-plan-btn" type="button">Save plan (local)</button>
+              <button id="size-btn" type="button" class="secondary">Size by risk</button>
+              <button id="save-plan-btn" type="button" class="secondary">Save plan (local)</button>
+              <button id="log-trade-btn" type="button">Log trade in journal</button>
             </div>
             <p id="plan-message" class="plan-message"></p>
           </section>
@@ -368,6 +390,41 @@
         real results would likely be worse. When the stop and target fall in the same daily bar the stop is
         assumed to hit first. R = profit ÷ initial risk (entry − stop). Past results don't predict future
         returns. Not financial advice.
+      </p>
+    </section>
+
+    <section id="view-journal" class="signals-view journal-view hidden" role="tabpanel" aria-labelledby="tab-journal">
+      <div class="signals-head">
+        <div>
+          <h2>Trade journal</h2>
+          <p class="muted">
+            Log trades from the order plan on the dashboard. Open trades get the backtest's 4× ATR trailing
+            stop; closed trades are scored the same way as the backtest so you can compare.
+          </p>
+        </div>
+        <div class="signals-actions">
+          <button id="journal-refresh-btn" type="button" class="secondary">Refresh prices</button>
+          <button id="journal-export-btn" type="button" class="secondary">Export</button>
+          <label class="import-btn secondary-like">Import<input id="journal-import" type="file" accept="application/json,.json" hidden></label>
+        </div>
+      </div>
+      <p id="journal-status" class="muted signals-status"></p>
+      <div id="journal-summary"></div>
+
+      <h3 class="bt-h3">Open trades</h3>
+      <div class="bt-table-wrap"><table class="bt-table">
+        <thead><tr><th>Symbol</th><th>Entry date</th><th>Entry</th><th>Shares</th><th>Initial stop</th><th>Price</th><th>Trail stop</th><th>Open R</th><th>P/L</th><th>Status</th><th></th></tr></thead>
+        <tbody id="journal-open"></tbody>
+      </table></div>
+
+      <h3 class="bt-h3">Closed trades</h3>
+      <div class="bt-table-wrap"><table class="bt-table">
+        <thead><tr><th>Symbol</th><th>Entry</th><th>Exit</th><th>Entry $</th><th>Exit $</th><th>Shares</th><th>R</th><th>P/L</th><th>App said</th><th>Notes</th><th></th></tr></thead>
+        <tbody id="journal-closed"></tbody>
+      </table></div>
+      <p class="disclaimer">
+        Saved in this browser only — use Export to back up or move it to another device.
+        Trailing stops are guides; place real stop orders with your broker. Not financial advice.
       </p>
     </section>
   </div>

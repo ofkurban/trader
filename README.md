@@ -47,6 +47,12 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
   beyond ±10 pts) and gives no "oversold bounce" credit below SMA200. Tested on ~180
   US stocks split into 2021–24 and 2024–26: it was the only change that improved both
   halves. The backtest also favors a **4× ATR trailing stop** over a fixed take profit
+- **Position sizing** in the order plan: enter account size and risk % (default 1%) and
+  it sizes shares as risk ÷ (entry − stop), warning when a plan breaks your rule
+- **Journal** tab: log trades from the order plan (with what the app said at the time),
+  track each open trade's 4× ATR trailing stop with a "stop hit" alert, and review closed
+  trades with the backtest's stats plus discipline checks (share taken on a BUY signal,
+  blown stops). Saved in the browser — Export/Import to back up or move devices
 
 ## API
 
@@ -56,6 +62,7 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
 | `GET /api/early-signals[?refresh=true]` | Top 10 early-signal stocks (cached 1 h) |
 | `GET /api/backtest?symbols=&period=5y&entry=buy_zone&exit=trail&min_score=3&max_hold=250&cost_bps=5` | Replay the BUY signal + levels on past data (cached 1 h) |
 | `GET /api/stock/{symbol}?period=1y` | History + levels for one symbol (`3mo`, `6mo`, `1y`, `2y`, `5y`, `ytd`, `max`) |
+| `POST /api/journal/review` | Trailing stops for open journal trades + stats for closed ones |
 | `POST /api/agent/chat/{symbol}` | Stock chat (used by the **Analyze setup** button) |
 | `POST /api/agent/analyze/{symbol}` | One-shot structured setup analysis |
 
@@ -71,6 +78,7 @@ Tests stub out Yahoo, so they run offline.
 ## Next steps
 
 - Connect [Alpaca paper trading](https://alpaca.markets/) for real limit/stop orders
+  (and sync fills into the journal)
 - Add price alerts when a symbol enters the buy zone
 - Optional: replace Yahoo delayed quotes with Alpaca market data
 

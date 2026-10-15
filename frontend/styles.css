@@ -1744,7 +1744,7 @@ button:disabled {
 
 .bt-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 140px), 1fr));
   gap: 0.6rem;
 }
 
@@ -1837,3 +1837,114 @@ button:disabled {
 
 .metric-trend .up { color: var(--green); }
 .metric-trend .down { color: var(--red); }
+
+/* ---- Position sizing + journal ---- */
+
+.sizing-row {
+  margin-top: 0.75rem;
+}
+
+.sizing-info {
+  font-size: 0.85rem;
+  margin: 0.6rem 0 0;
+  min-height: 1.2em;
+}
+
+.form-actions {
+  flex-wrap: wrap;
+}
+
+.import-btn {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 1rem;
+  font-weight: 600;
+  font-size: 0.8333rem;
+  cursor: pointer;
+}
+
+.journal-view .disclaimer {
+  margin-top: 1rem;
+}
+
+.import-btn:hover {
+  filter: brightness(1.08);
+}
+
+.import-btn:focus-within {
+  outline: 2px solid var(--blue);
+}
+
+.j-alert {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.j-ok {
+  color: var(--green);
+}
+
+.j-signal {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: var(--surface2);
+  color: var(--muted);
+}
+
+.j-signal.buy {
+  color: var(--green);
+  background: rgba(61, 214, 140, 0.12);
+}
+
+.j-signal.sell {
+  color: var(--red);
+  background: rgba(240, 113, 120, 0.12);
+}
+
+.bt-table td.j-notes {
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  color: var(--muted);
+}
+
+.j-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.j-actions button.secondary {
+  padding: 0.3rem 0.65rem;
+  font-size: 0.8rem;
+}
+
+.j-close-form {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.j-close-form input {
+  width: 7.5rem;
+  padding: 0.3rem 0.45rem;
+  font-size: 0.85rem;
+}
+
+.j-close-form button {
+  padding: 0.3rem 0.65rem;
+  font-size: 0.8rem;
+}
+
+.sizing-info.over-rule {
+  color: var(--yellow);
+}

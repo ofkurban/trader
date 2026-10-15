@@ -52,6 +52,13 @@ const els = {
   inputTakeProfit: document.getElementById("input-take-profit"),
   inputStop: document.getElementById("input-stop"),
   inputShares: document.getElementById("input-shares"),
+  inputAccount: document.getElementById("input-account"),
+  inputRiskPct: document.getElementById("input-risk-pct"),
+  inputEntryDate: document.getElementById("input-entry-date"),
+  inputNotes: document.getElementById("input-notes"),
+  sizingInfo: document.getElementById("sizing-info"),
+  sizeBtn: document.getElementById("size-btn"),
+  logTradeBtn: document.getElementById("log-trade-btn"),
   planMessage: document.getElementById("plan-message"),
   symbolSearch: document.getElementById("symbol-search"),
   symbolInput: document.getElementById("symbol-input"),
@@ -119,6 +126,16 @@ function pctClass(value) {
 
 function formatMoney(value) {
   return `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+// P/L style: "−$142.98" rather than "$-142.98"
+function formatSignedMoney(value) {
+  const n = Number(value);
+  return `${n < 0 ? "−" : n > 0 ? "+" : ""}${formatMoney(Math.abs(n))}`;
+}
+
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
 function formatVolume(value) {
@@ -365,6 +382,20 @@ function renderOvernight(data) {
 
 function planKey(symbol) {
   return `trader-plan-${symbol}`;
+}
+
+async function postJson(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const detail = Array.isArray(err.detail) ? err.detail.map((d) => d.msg).join("; ") : err.detail;
+    throw new Error(detail || res.statusText);
+  }
+  return res.json();
 }
 
 async function fetchJson(url) {
@@ -730,6 +761,11 @@ function renderStock(data) {
     applySuggestedToForm(data.levels);
     els.planMessage.textContent = "";
   }
+  if (symbolChanged) {
+    els.inputEntryDate.value = todayIso();
+    els.inputNotes.value = "";
+  }
+  updateSizingInfo();
 
   ensureCharts();
 
@@ -1234,7 +1270,12 @@ els.symbolSearch.addEventListener("submit", (e) => {
 
 // ---- Tabs ----
 
-const views = { dashboard: "view-dashboard", signals: "view-signals", backtest: "view-backtest" };
+const views = {
+  dashboard: "view-dashboard",
+  signals: "view-signals",
+  backtest: "view-backtest",
+  journal: "view-journal",
+};
 
 function showView(name) {
   if (!views[name]) name = "dashboard";
@@ -1246,6 +1287,7 @@ function showView(name) {
   }
   if (name === "signals" && !signalsLoaded) loadSignals();
   if (name === "backtest" && !backtestLoaded) runBacktest();
+  if (name === "journal") refreshJournal();
 }
 
 document.querySelectorAll(".tab").forEach((tab) => {
@@ -1568,6 +1610,404 @@ async function runBacktest() {
 btEls.form.addEventListener("submit", (e) => {
   e.preventDefault();
   runBacktest();
+});
+
+// ---- Position sizing + trade journal ----
+// Stored in this browser (the free host has no disk); Export/Import moves it.
+
+const JOURNAL_KEY = "trader-journal";
+
+const jEls = {
+  status: document.getElementById("journal-status"),
+  summary: document.getElementById("journal-summary"),
+  open: document.getElementById("journal-open"),
+  closed: document.getElementById("journal-closed"),
+  refreshBtn: document.getElementById("journal-refresh-btn"),
+  exportBtn: document.getElementById("journal-export-btn"),
+  importInput: document.getElementById("journal-import"),
+};
+
+function todayIso() {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+function emptyJournal() {
+  return { version: 1, settings: { account: null, riskPct: 1 }, trades: [] };
+}
+
+function loadJournal() {
+  try {
+    const data = JSON.parse(localStorage.getItem(JOURNAL_KEY) || "null");
+    if (data && Array.isArray(data.trades)) return { ...emptyJournal(), ...data };
+  } catch {
+    /* unreadable: start fresh */
+  }
+  return emptyJournal();
+}
+
+let journal = loadJournal();
+let journalMarks = {};
+let journalSeq = 0;
+
+function saveJournal() {
+  try {
+    localStorage.setItem(JOURNAL_KEY, JSON.stringify(journal));
+    return true;
+  } catch {
+    jEls.status.textContent = "Could not save — browser storage is unavailable. Export to keep your data.";
+    return false;
+  }
+}
+
+// ---- Sizing ----
+
+function riskSettings() {
+  const account = Number(els.inputAccount.value);
+  const riskPct = Number(els.inputRiskPct.value);
+  return { account: account > 0 ? account : null, riskPct: riskPct > 0 ? riskPct : null };
+}
+
+function sizePosition(entry, stop) {
+  const { account, riskPct } = riskSettings();
+  const perShare = entry - stop;
+  if (!account || !riskPct || !(entry > 0) || !(perShare > 0)) return null;
+  const riskBudget = (account * riskPct) / 100;
+  // Never size a position bigger than the account
+  const shares = Math.floor(Math.min(riskBudget / perShare, account / entry));
+  return { shares, riskBudget, perShare, capped: riskBudget / perShare > account / entry };
+}
+
+function updateSizingInfo() {
+  const entry = Number(els.inputBuy.value);
+  const stop = Number(els.inputStop.value);
+  const shares = Number(els.inputShares.value);
+  const { account } = riskSettings();
+  const parts = [];
+  if (entry > 0 && stop > 0 && stop < entry && shares > 0) {
+    const risk = (entry - stop) * shares;
+    const value = entry * shares;
+    const { riskPct } = riskSettings();
+    const riskShare = account ? (risk / account) * 100 : null;
+    const overRule = riskShare != null && riskPct && riskShare > riskPct * 1.05;
+    parts.push(
+      `This plan risks ${formatMoney(risk)}${riskShare != null ? ` (${riskShare.toFixed(2)}% of account)` : ""}` +
+        (overRule ? ` — over your ${riskPct}% rule` : ""),
+    );
+    els.sizingInfo.classList.toggle("over-rule", Boolean(overRule));
+    parts.push(`position ${formatMoney(value)}${account ? ` (${((value / account) * 100).toFixed(0)}% of account)` : ""}`);
+  }
+  const sized = sizePosition(entry, stop);
+  if (sized) {
+    parts.push(
+      sized.shares > 0
+        ? `sized by risk: ${plural(sized.shares, "share")}${sized.capped ? " (capped at account size)" : ""}`
+        : "risk budget is smaller than one share's risk",
+    );
+  } else if (!account) {
+    parts.push("enter your account size to size by risk");
+  }
+  els.sizingInfo.textContent = parts.length ? `${parts.join(" · ")}.` : "";
+}
+
+function saveRiskSettings() {
+  const { account, riskPct } = riskSettings();
+  journal.settings = { account, riskPct: riskPct ?? 1 };
+  saveJournal();
+}
+
+els.inputAccount.value = journal.settings.account ?? "";
+els.inputRiskPct.value = journal.settings.riskPct ?? 1;
+els.inputEntryDate.value = todayIso();
+for (const input of [els.inputBuy, els.inputStop, els.inputShares, els.inputAccount, els.inputRiskPct]) {
+  input.addEventListener("input", updateSizingInfo);
+}
+for (const input of [els.inputAccount, els.inputRiskPct]) {
+  input.addEventListener("change", saveRiskSettings);
+}
+
+els.sizeBtn.addEventListener("click", () => {
+  const sized = sizePosition(Number(els.inputBuy.value), Number(els.inputStop.value));
+  if (!sized) {
+    els.planMessage.textContent = "Enter account size, risk %, and a stop below the buy price first.";
+    return;
+  }
+  if (sized.shares < 1) {
+    els.planMessage.textContent = "The stop is too far away for your risk budget — even 1 share risks too much.";
+    return;
+  }
+  els.inputShares.value = sized.shares;
+  els.planMessage.textContent = `Sized to ${plural(sized.shares, "share")}: risking ${formatMoney(sized.shares * sized.perShare)}.`;
+  updateSizingInfo();
+});
+
+els.logTradeBtn.addEventListener("click", () => {
+  if (!currentSymbol || !currentLevels) return;
+  const plan = {
+    buy: Number(els.inputBuy.value),
+    takeProfit: Number(els.inputTakeProfit.value),
+    stop: Number(els.inputStop.value),
+    shares: Number(els.inputShares.value),
+  };
+  const problem = validatePlan(plan);
+  if (problem) {
+    els.planMessage.textContent = `Not logged: ${problem}`;
+    return;
+  }
+  const entryDate = els.inputEntryDate.value || todayIso();
+  if (entryDate > todayIso()) {
+    els.planMessage.textContent = "Not logged: entry date is in the future.";
+    return;
+  }
+  const rec = currentLevels.recommendation || {};
+  journal.trades.push({
+    id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    symbol: currentSymbol,
+    entryDate,
+    entry: plan.buy,
+    shares: plan.shares,
+    stop: plan.stop,
+    target: plan.takeProfit,
+    // What the app said when the trade was taken, to check later whether following it paid
+    signal: { action: rec.action ?? null, score: rec.score ?? null, relStrength: currentLevels.rel_strength_6m ?? null },
+    notes: els.inputNotes.value.trim(),
+    loggedAt: new Date().toISOString(),
+  });
+  if (saveJournal()) {
+    els.planMessage.textContent = `Logged ${plural(plan.shares, "share")} of ${currentSymbol} at ${formatMoney(plan.buy)} — see the Journal tab.`;
+    els.inputNotes.value = "";
+  }
+});
+
+// ---- Journal view ----
+
+const openTrades = () => journal.trades.filter((t) => t.exit == null);
+const closedTrades = () => journal.trades.filter((t) => t.exit != null);
+
+function tradeR(t, price) {
+  return (price - t.entry) / (t.entry - t.stop);
+}
+
+function renderJournalSummary(review) {
+  const s = review?.stats;
+  const d = review?.discipline;
+  if (!s || !s.trades) {
+    jEls.summary.innerHTML = `<p class="muted bt-note">Close a few trades to see your stats here.</p>`;
+    return;
+  }
+  const lines = [];
+  if (s.trades < 20) lines.push(`${plural(s.trades, "closed trade")} so far — stats get meaningful after about 20.`);
+  lines.push(`Your trades average ${fmtR(s.expectancy_r)} each${s.expectancy_r > 0 ? "" : " — no edge yet"}.`);
+  if (d.on_signal.trades && d.off_signal.trades) {
+    lines.push(
+      `Trades taken on a BUY signal averaged ${fmtR(d.on_signal.expectancy_r)} vs ${fmtR(d.off_signal.expectancy_r)} for the rest.`,
+    );
+  }
+  if (d.blown_stops) {
+    lines.push(`${d.blown_stops} trade${d.blown_stops > 1 ? "s" : ""} lost well past the stop, costing an extra ${fmtR(d.blown_stop_r)}.`);
+  }
+  jEls.summary.innerHTML = `
+    <p class="bt-verdict">${escapeHtml(lines.join(" "))}</p>
+    <div class="bt-tiles">
+      ${btTile("Closed trades", s.trades, "", `avg ${s.avg_days} days held`)}
+      ${btTile("Win rate", `${s.win_rate}%`)}
+      ${btTile("Expectancy", fmtR(s.expectancy_r), pctClass(s.expectancy_r), "average R per trade")}
+      ${btTile("Avg win / loss", `${fmtR(s.avg_win_r)} / ${fmtR(s.avg_loss_r)}`)}
+      ${btTile("Total P/L", formatSignedMoney(s.total_pnl), pctClass(s.total_pnl))}
+      ${btTile("Max drawdown", `−${s.max_drawdown_r}R`, "down", "worst peak-to-trough")}
+      ${btTile("On a BUY signal", `${d.on_signal_pct}%`, "", "share of your trades")}
+      ${btTile("Blown stops", d.blown_stops, d.blown_stops ? "down" : "", "lost more than 1.2R")}
+    </div>`;
+}
+
+function renderJournalTables() {
+  const open = openTrades();
+  jEls.open.innerHTML = open.length
+    ? open
+        .map((t) => {
+          const m = journalMarks[t.id];
+          const price = m && !m.error ? m.price : null;
+          const status = !m
+            ? `<span class="muted">…</span>`
+            : m.error
+              ? `<span class="muted" title="${escapeHtml(m.error)}">no data</span>`
+              : m.stop_hit
+                ? `<span class="j-alert">Stop hit ${escapeHtml(m.stop_hit.date)} at ${formatMoney(m.stop_hit.stop)} — exit</span>`
+                : `<span class="j-ok">Hold · locks ${fmtR(m.locked_r)}</span>`;
+          return `<tr data-id="${escapeHtml(t.id)}">
+            <td>${escapeHtml(t.symbol)}</td><td>${escapeHtml(t.entryDate)}</td><td>${formatMoney(t.entry)}</td>
+            <td>${t.shares}</td><td>${formatMoney(t.stop)}</td>
+            <td>${price != null ? formatMoney(price) : "—"}</td>
+            <td>${m && !m.error ? formatMoney(m.trail_stop) : "—"}</td>
+            <td class="${pctClass(m?.open_r)}">${m && !m.error ? fmtR(m.open_r) : "—"}</td>
+            <td class="${pctClass(price != null ? price - t.entry : null)}">${price != null ? formatSignedMoney((price - t.entry) * t.shares) : "—"}</td>
+            <td>${status}</td>
+            <td class="j-actions">
+              <span class="j-close-form hidden">
+                <input type="number" class="j-exit-price" step="0.01" min="0" value="${m?.stop_hit ? m.stop_hit.stop : price ?? ""}" aria-label="Exit price">
+                <input type="date" class="j-exit-date" value="${m?.stop_hit ? m.stop_hit.date : todayIso()}" aria-label="Exit date">
+                <button type="button" class="j-confirm-close">Save</button>
+              </span>
+              <button type="button" class="secondary j-close">Close</button>
+              <button type="button" class="link-btn j-delete">Delete</button>
+            </td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="11" class="muted">No open trades. Log one from the order plan on the dashboard.</td></tr>`;
+
+  const closed = closedTrades().sort((a, b) => (a.exitDate < b.exitDate ? 1 : -1));
+  jEls.closed.innerHTML = closed.length
+    ? closed
+        .map((t) => {
+          const r = tradeR(t, t.exit);
+          const action = t.signal?.action;
+          return `<tr data-id="${escapeHtml(t.id)}">
+            <td>${escapeHtml(t.symbol)}</td><td>${escapeHtml(t.entryDate)}</td><td>${escapeHtml(t.exitDate)}</td>
+            <td>${formatMoney(t.entry)}</td><td>${formatMoney(t.exit)}</td><td>${t.shares}</td>
+            <td class="${pctClass(r)}">${fmtR(r)}</td>
+            <td class="${pctClass(t.exit - t.entry)}">${formatSignedMoney((t.exit - t.entry) * t.shares)}</td>
+            <td><span class="j-signal ${(action || "none").toLowerCase()}">${escapeHtml(action || "—")}${t.signal?.score != null ? ` ${t.signal.score > 0 ? "+" : ""}${t.signal.score}` : ""}</span></td>
+            <td class="j-notes" title="${escapeHtml(t.notes || "")}">${escapeHtml(t.notes || "")}</td>
+            <td class="j-actions"><button type="button" class="link-btn j-reopen">Reopen</button><button type="button" class="link-btn j-delete">Delete</button></td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="11" class="muted">No closed trades yet.</td></tr>`;
+}
+
+async function refreshJournal() {
+  const seq = ++journalSeq;
+  renderJournalTables();
+  const open = openTrades();
+  const closed = closedTrades();
+  if (!open.length && !closed.length) {
+    renderJournalSummary(null);
+    jEls.status.textContent = "";
+    return;
+  }
+  jEls.status.textContent = open.length ? "Updating prices and trailing stops…" : "";
+  try {
+    const review = await postJson(`${API}/journal/review`, {
+      open: open.map((t) => ({ id: t.id, symbol: t.symbol, entry_date: t.entryDate, entry_price: t.entry, initial_stop: t.stop })),
+      closed: closed.map((t) => ({
+        symbol: t.symbol,
+        entry_date: t.entryDate,
+        exit_date: t.exitDate,
+        entry_price: t.entry,
+        initial_stop: t.stop,
+        exit_price: t.exit,
+        shares: t.shares,
+        signal_action: t.signal?.action ?? null,
+      })),
+    });
+    if (seq !== journalSeq) return;
+    journalMarks = review.marks;
+    renderJournalSummary(review);
+    renderJournalTables();
+    const hits = Object.values(review.marks).filter((m) => m.stop_hit).length;
+    jEls.status.textContent = hits
+      ? `${hits} open trade${hits > 1 ? "s have" : " has"} hit the trailing stop — close ${hits > 1 ? "them" : "it"} to follow the system.`
+      : open.length
+        ? `Updated ${new Date().toLocaleTimeString()}.`
+        : "";
+  } catch (err) {
+    if (seq !== journalSeq) return;
+    jEls.status.textContent = `Review failed: ${err.message}`;
+  }
+}
+
+function tradeById(id) {
+  return journal.trades.find((t) => t.id === id);
+}
+
+function onJournalClick(e) {
+  const btn = e.target.closest("button");
+  const row = e.target.closest("tr[data-id]");
+  if (!btn || !row) return;
+  const trade = tradeById(row.dataset.id);
+  if (!trade) return;
+
+  if (btn.classList.contains("j-close")) {
+    row.querySelector(".j-close-form").classList.toggle("hidden");
+    btn.textContent = btn.textContent === "Close" ? "Cancel" : "Close";
+  } else if (btn.classList.contains("j-confirm-close")) {
+    const price = Number(row.querySelector(".j-exit-price").value);
+    const exitDate = row.querySelector(".j-exit-date").value;
+    if (!(price > 0) || !exitDate || exitDate < trade.entryDate || exitDate > todayIso()) {
+      jEls.status.textContent = "Enter an exit price and a date between the entry date and today.";
+      return;
+    }
+    Object.assign(trade, { exit: price, exitDate });
+    saveJournal();
+    refreshJournal();
+  } else if (btn.classList.contains("j-reopen")) {
+    delete trade.exit;
+    delete trade.exitDate;
+    saveJournal();
+    refreshJournal();
+  } else if (btn.classList.contains("j-delete")) {
+    // Two clicks instead of a confirm() dialog
+    if (btn.dataset.armed) {
+      journal.trades = journal.trades.filter((t) => t.id !== trade.id);
+      saveJournal();
+      refreshJournal();
+    } else {
+      btn.dataset.armed = "1";
+      btn.textContent = "Sure? Delete";
+      setTimeout(() => {
+        delete btn.dataset.armed;
+        btn.textContent = "Delete";
+      }, 3000);
+    }
+  }
+}
+
+jEls.open.addEventListener("click", onJournalClick);
+jEls.closed.addEventListener("click", onJournalClick);
+jEls.refreshBtn.addEventListener("click", refreshJournal);
+
+jEls.exportBtn.addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(journal, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `trader-journal-${todayIso()}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+});
+
+function validImportedTrade(t) {
+  const num = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
+  const day = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+  return (
+    t && typeof t.id === "string" && t.id.length <= 64 &&
+    typeof t.symbol === "string" && /^[A-Za-z0-9.^=-]{1,20}$/.test(t.symbol) && day(t.entryDate) &&
+    num(t.entry) && num(t.shares) && num(t.stop) && t.stop < t.entry &&
+    (t.exit == null || (num(t.exit) && day(t.exitDate)))
+  );
+}
+
+jEls.importInput.addEventListener("change", async () => {
+  const file = jEls.importInput.files[0];
+  jEls.importInput.value = "";
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    const incoming = Array.isArray(data?.trades) ? data.trades : [];
+    const valid = incoming.filter(validImportedTrade);
+    // Merge by id so importing the same backup twice doesn't duplicate trades
+    const known = new Set(journal.trades.map((t) => t.id));
+    const added = valid.filter((t) => !known.has(t.id));
+    journal.trades.push(...added);
+    if (!journal.settings.account && data.settings?.account) journal.settings = { ...journal.settings, ...data.settings };
+    saveJournal();
+    jEls.status.textContent =
+      `Imported ${added.length} trade${added.length === 1 ? "" : "s"}` +
+      (valid.length > added.length ? ` (${valid.length - added.length} already here)` : "") +
+      (incoming.length > valid.length ? `; skipped ${incoming.length - valid.length} invalid` : "") +
+      ".";
+    refreshJournal();
+  } catch {
+    jEls.status.textContent = "Import failed: that file isn't a journal export.";
+  }
 });
 
 async function init() {

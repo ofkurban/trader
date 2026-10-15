@@ -12,7 +12,7 @@ import yfinance as yf
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from backend import alpaca
 from backend.auth import basic_auth_middleware
@@ -21,6 +21,7 @@ from backend.cache import ttl_cache
 from backend.config import WATCHLIST
 from backend.early_signals import scan as scan_early_signals
 from backend.greed_index import compute_greedy_risk_index
+from backend.journal import review_closed, trail_status
 from backend.ladder import compute_system
 from backend.levels import compute_levels, compute_price_stats, history_to_records
 from backend.news import fetch_chip_news, fetch_news
@@ -32,6 +33,16 @@ log = logging.getLogger("trader")
 
 app = FastAPI(title="Trader", version="0.3.0")
 app.middleware("http")(basic_auth_middleware)
+
+
+@app.middleware("http")
+async def revalidate_frontend(request, call_next):
+    """Make browsers re-check the page and static files (cheap 304s via ETag), so a
+    deploy never leaves someone running old JavaScript against a new API."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
@@ -51,6 +62,35 @@ class ChatRequest(BaseModel):
     history: list[ChatMessage] = Field(default_factory=list, max_length=50)
     provider: str | None = Field(default=None, pattern=r"^[a-z]{1,20}$")
     model: str | None = Field(default=None, pattern=r"^[\w.:/-]{1,100}$")
+
+
+class _JournalTrade(BaseModel):
+    symbol: str = Field(min_length=1, max_length=20)
+    entry_date: date
+    entry_price: float = Field(gt=0)
+    initial_stop: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def stop_below_entry(self):
+        if self.initial_stop >= self.entry_price:
+            raise ValueError("initial_stop must be below entry_price")
+        return self
+
+
+class OpenTrade(_JournalTrade):
+    id: str = Field(min_length=1, max_length=64)
+
+
+class ClosedTrade(_JournalTrade):
+    exit_date: date
+    exit_price: float = Field(gt=0)
+    shares: float = Field(gt=0)
+    signal_action: Literal["BUY", "HOLD", "SELL"] | None = None
+
+
+class JournalReview(BaseModel):
+    open: list[OpenTrade] = Field(default_factory=list, max_length=100)
+    closed: list[ClosedTrade] = Field(default_factory=list, max_length=5000)
 
 
 @ttl_cache(seconds=120, maxsize=300)
@@ -244,6 +284,30 @@ def get_backtest(
         entry_window=entry_window,
         cost_bps=cost_bps,
     )
+
+
+def _journal_mark(trade: OpenTrade) -> dict:
+    age = (date.today() - trade.entry_date).days
+    period = "1y" if age < 300 else "2y" if age < 680 else "5y"
+    try:
+        hist = fetch_history(normalize_symbol(trade.symbol), period)
+        return trail_status(
+            hist, entry_date=trade.entry_date, entry_price=trade.entry_price, initial_stop=trade.initial_stop
+        )
+    except HTTPException as exc:
+        return {"error": exc.detail}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@app.post("/api/journal/review")
+def journal_review(body: JournalReview):
+    """Trailing stops for open trades + stats for closed ones (the journal itself is client-side)."""
+    with ThreadPoolExecutor(max_workers=min(len(body.open), 10) or 1) as pool:
+        marks = dict(zip((t.id for t in body.open), pool.map(_journal_mark, body.open)))
+    closed = [{**t.model_dump(), "entry_date": t.entry_date.isoformat(), "exit_date": t.exit_date.isoformat()}
+              for t in body.closed]
+    return {"marks": marks, **review_closed(closed)}
 
 
 @app.get("/api/news/chips")

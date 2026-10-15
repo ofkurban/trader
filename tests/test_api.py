@@ -129,3 +129,25 @@ def test_backtest_endpoint(client):
     assert body["params"]["min_score"] == 4
     assert [s["symbol"] for s in body["symbols"]] == ["AAPL"]
     assert client.get("/api/backtest?entry=bogus").status_code == 422
+
+
+def test_journal_review(client):
+    body = {
+        "open": [{"id": "t1", "symbol": "aapl", "entry_date": "2026-06-01", "entry_price": 150, "initial_stop": 140}],
+        "closed": [{"symbol": "MSFT", "entry_date": "2026-01-02", "exit_date": "2026-02-02", "entry_price": 100,
+                    "initial_stop": 95, "exit_price": 110, "shares": 5, "signal_action": "BUY"}],
+    }
+    res = client.post("/api/journal/review", json=body)
+    assert res.status_code == 200
+    data = res.json()
+    assert set(data["marks"]["t1"]) >= {"price", "trail_stop", "open_r", "stop_hit"}
+    assert data["stats"]["expectancy_r"] == 2.0
+    assert data["discipline"]["on_signal_pct"] == 100.0
+    bad = {"open": [{**body["open"][0], "initial_stop": 160}]}
+    assert client.post("/api/journal/review", json=bad).status_code == 422
+
+
+def test_frontend_is_revalidated(client):
+    assert client.get("/").headers["cache-control"] == "no-cache"
+    assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
+    assert "cache-control" not in client.get("/healthz").headers
