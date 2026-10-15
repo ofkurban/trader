@@ -1222,7 +1222,7 @@ els.symbolSearch.addEventListener("submit", (e) => {
 
 // ---- Tabs ----
 
-const views = { dashboard: "view-dashboard", signals: "view-signals" };
+const views = { dashboard: "view-dashboard", signals: "view-signals", backtest: "view-backtest" };
 
 function showView(name) {
   if (!views[name]) name = "dashboard";
@@ -1233,6 +1233,7 @@ function showView(name) {
     tab.setAttribute("aria-selected", String(key === name));
   }
   if (name === "signals" && !signalsLoaded) loadSignals();
+  if (name === "backtest" && !backtestLoaded) runBacktest();
 }
 
 document.querySelectorAll(".tab").forEach((tab) => {
@@ -1379,6 +1380,179 @@ signalsEls.promptBtn.addEventListener("click", async () => {
     window.prompt("Copy this prompt:", researchPrompt());
   }
   setTimeout(() => (signalsEls.promptBtn.textContent = original), 2000);
+});
+
+// ---- Backtest ----
+
+const btEls = {
+  form: document.getElementById("bt-form"),
+  period: document.getElementById("bt-period"),
+  entry: document.getElementById("bt-entry"),
+  minScore: document.getElementById("bt-min-score"),
+  maxHold: document.getElementById("bt-max-hold"),
+  cost: document.getElementById("bt-cost"),
+  runBtn: document.getElementById("bt-run-btn"),
+  status: document.getElementById("bt-status"),
+  results: document.getElementById("bt-results"),
+};
+
+const EXIT_LABELS = {
+  target: "Take profit",
+  target_gap: "Gapped above target",
+  stop: "Stop loss",
+  stop_gap: "Gapped below stop",
+  time: "Max hold reached",
+  open: "Still open",
+};
+
+let backtestLoaded = false;
+let backtestSeq = 0;
+
+function fmtR(value) {
+  if (value == null) return "—";
+  return `${value > 0 ? "+" : ""}${Number(value).toFixed(2)}R`;
+}
+
+function btTile(label, value, cls = "", hint = "") {
+  return `<div class="bt-tile"><span class="bt-tile-label">${escapeHtml(label)}</span>
+    <span class="bt-tile-value ${cls}">${value}</span>${hint ? `<span class="bt-tile-hint">${escapeHtml(hint)}</span>` : ""}</div>`;
+}
+
+// One plain-language takeaway, so the numbers lead to a decision
+function btVerdict(data) {
+  const o = data.overall;
+  const buy = data.signal_study.by_action.BUY;
+  const hold = data.signal_study.by_action.HOLD;
+  if (!o.trades) return "No trades were triggered — try a lower minimum score or a longer period.";
+  const lines = [];
+  if (o.trades < 30) lines.push(`Only ${o.trades} trades — too few to trust; add more symbols or a longer period.`);
+  lines.push(
+    o.expectancy_r > 0
+      ? `Positive edge: each trade made ${fmtR(o.expectancy_r)} on average (profit factor ${o.profit_factor ?? "—"}).`
+      : `No edge: each trade averaged ${fmtR(o.expectancy_r)}.`,
+  );
+  if (buy && hold && buy.avg_20d != null && hold.avg_20d != null) {
+    lines.push(
+      buy.avg_20d > hold.avg_20d
+        ? `BUY days beat HOLD days over the next 20 days (${formatPct(buy.avg_20d)} vs ${formatPct(hold.avg_20d)}), so the score adds information.`
+        : `BUY days did worse than HOLD days over the next 20 days (${formatPct(buy.avg_20d)} vs ${formatPct(hold.avg_20d)}), so the score isn't picking better moments than chance.`,
+    );
+  }
+  const beaten = data.symbols.filter((s) => s.buy_hold_pct != null && s.strategy_return_pct < s.buy_hold_pct).length;
+  if (beaten) lines.push(`Buying and holding beat the strategy on ${beaten} of ${data.symbols.length} symbols.`);
+  return lines.join(" ");
+}
+
+function studyRows(groups, labelFn) {
+  // Integer-like keys ("-6", "3") lose their order in JS objects; sort numerically
+  return Object.entries(groups)
+    .sort(([a], [b]) => (Number.isNaN(+a) ? 0 : +a - +b))
+    .map(([name, g]) => `<tr><td>${escapeHtml(labelFn(name))}</td><td>${g.days}</td>
+      ${[5, 20, 60].map((d) => `<td class="${pctClass(g[`avg_${d}d`])}">${formatPct(g[`avg_${d}d`])}</td><td>${g[`pos_${d}d`] == null ? "—" : `${g[`pos_${d}d`]}%`}</td>`).join("")}</tr>`)
+    .join("");
+}
+
+function renderBacktest(data) {
+  const o = data.overall;
+  const studyHead = `<tr><th></th><th>Days</th>${[5, 20, 60].map((d) => `<th>Avg ${d}d</th><th>% up</th>`).join("")}</tr>`;
+  const symbols = data.symbols
+    .map((s) => `<tr>
+      <td><button type="button" class="link-btn bt-symbol" data-symbol="${escapeHtml(s.symbol)}">${escapeHtml(s.symbol)}</button></td>
+      <td>${escapeHtml(s.from)} → ${escapeHtml(s.to)}</td>
+      <td>${s.summary.trades}</td>
+      <td>${s.summary.trades ? `${s.summary.win_rate}%` : "—"}</td>
+      <td class="${pctClass(s.summary.expectancy_r)}">${fmtR(s.summary.expectancy_r)}</td>
+      <td class="${pctClass(s.strategy_return_pct)}">${formatPct(s.strategy_return_pct)}</td>
+      <td class="${pctClass(s.buy_hold_pct)}">${formatPct(s.buy_hold_pct)}</td></tr>`)
+    .join("");
+  const trades = data.trades
+    .slice(-50)
+    .reverse()
+    .map((t) => `<tr>
+      <td>${escapeHtml(t.symbol)}</td><td>${escapeHtml(t.entry_date)}</td><td>${t.score}</td>
+      <td>${formatMoney(t.entry)}</td><td>${formatMoney(t.stop)}</td><td>${formatMoney(t.target)}</td>
+      <td>${escapeHtml(t.exit_date)}</td><td>${formatMoney(t.exit)}</td>
+      <td>${escapeHtml(EXIT_LABELS[t.reason] || t.reason)}</td><td>${t.days}</td>
+      <td class="${pctClass(t.r)}">${fmtR(t.r)}</td></tr>`)
+    .join("");
+  const errors = Object.entries(data.errors)
+    .map(([sym, err]) => `${sym}: ${err}`)
+    .join("; ");
+
+  btEls.results.innerHTML = `
+    <p class="bt-verdict">${escapeHtml(btVerdict(data))}</p>
+    <div class="bt-tiles">
+      ${btTile("Trades", o.trades ?? 0, "", o.avg_days ? `avg ${o.avg_days} days held` : "")}
+      ${btTile("Win rate", o.trades ? `${o.win_rate}%` : "—")}
+      ${btTile("Expectancy", fmtR(o.expectancy_r), pctClass(o.expectancy_r), "average R per trade")}
+      ${btTile("Avg win / loss", o.trades ? `${fmtR(o.avg_win_r)} / ${fmtR(o.avg_loss_r)}` : "—")}
+      ${btTile("Profit factor", o.profit_factor ?? "—", "", "gross wins ÷ gross losses")}
+      ${btTile("Max drawdown", o.trades ? `−${o.max_drawdown_r}R` : "—", "down", "worst peak-to-trough")}
+      ${btTile("Account at 1% risk", formatPct(o.return_at_1pct_risk), pctClass(o.return_at_1pct_risk), "risking 1% per trade")}
+      ${btTile("SPY buy & hold", formatPct(data.benchmark_buy_hold_pct), pctClass(data.benchmark_buy_hold_pct), "same window")}
+    </div>
+    ${o.exits ? `<p class="muted bt-exits">Exits: ${Object.entries(o.exits).map(([k, v]) => `${escapeHtml(EXIT_LABELS[k] || k)} ${v}`).join(" · ")}</p>` : ""}
+
+    <h3 class="bt-h3">Does the score predict returns?</h3>
+    <p class="muted bt-note">Average move after every past day, grouped by what the app said that day. A useful signal shows BUY above HOLD above SELL, and higher scores above lower ones.</p>
+    <div class="bt-table-wrap"><table class="bt-table">
+      <thead>${studyHead}</thead>
+      <tbody>${studyRows(data.signal_study.by_action, (n) => n)}</tbody>
+      <tbody class="bt-score-rows">${studyRows(data.signal_study.by_score, (n) => `Score ${n > 0 ? "+" : ""}${n}`)}</tbody>
+    </table></div>
+
+    <h3 class="bt-h3">By symbol</h3>
+    <div class="bt-table-wrap"><table class="bt-table">
+      <thead><tr><th>Symbol</th><th>Tested</th><th>Trades</th><th>Win rate</th><th>Expectancy</th><th>Strategy</th><th>Buy &amp; hold</th></tr></thead>
+      <tbody>${symbols}</tbody>
+    </table></div>
+
+    <h3 class="bt-h3">Latest trades</h3>
+    <div class="bt-table-wrap"><table class="bt-table">
+      <thead><tr><th>Symbol</th><th>Entry</th><th>Score</th><th>Entry $</th><th>Stop</th><th>Target</th><th>Exit</th><th>Exit $</th><th>Reason</th><th>Days</th><th>R</th></tr></thead>
+      <tbody>${trades || `<tr><td colspan="11" class="muted">No trades.</td></tr>`}</tbody>
+    </table></div>
+    ${errors ? `<p class="muted bt-note">Skipped: ${escapeHtml(errors)}</p>` : ""}`;
+
+  btEls.results.querySelectorAll(".bt-symbol").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      history.replaceState(null, "", location.pathname);
+      showView("dashboard");
+      openStock(btn.dataset.symbol);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  });
+}
+
+async function runBacktest() {
+  const seq = ++backtestSeq;
+  backtestLoaded = true;
+  btEls.runBtn.disabled = true;
+  btEls.status.textContent = "Replaying past data for your watchlist… this can take up to a minute.";
+  const params = new URLSearchParams({
+    period: btEls.period.value,
+    entry: btEls.entry.value,
+    min_score: btEls.minScore.value,
+    max_hold: btEls.maxHold.value,
+    cost_bps: btEls.cost.value,
+  });
+  try {
+    const data = await fetchJson(`${API}/backtest?${params}${symbolsQuery("&")}`);
+    if (seq !== backtestSeq) return;
+    btEls.status.textContent = `Tested ${data.symbols.length} symbols.`;
+    renderBacktest(data);
+  } catch (err) {
+    if (seq !== backtestSeq) return;
+    backtestLoaded = false;
+    btEls.status.textContent = `Backtest failed: ${err.message}`;
+  } finally {
+    if (seq === backtestSeq) btEls.runBtn.disabled = false;
+  }
+}
+
+btEls.form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  runBacktest();
 });
 
 async function init() {

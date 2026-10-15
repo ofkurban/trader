@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from backend import alpaca
 from backend.auth import basic_auth_middleware
+from backend.backtest import run_backtest
 from backend.cache import ttl_cache
 from backend.config import WATCHLIST
 from backend.early_signals import scan as scan_early_signals
@@ -36,6 +37,7 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 
 Period = Literal["3mo", "6mo", "1y", "2y", "5y", "ytd", "max"]
+BacktestPeriod = Literal["2y", "5y", "max"]
 
 
 class ChatMessage(BaseModel):
@@ -188,6 +190,49 @@ def get_early_signals(refresh: bool = False):
     except Exception as exc:
         log.exception("Early-signals scan failed")
         raise HTTPException(status_code=502, detail=f"Early-signals scan failed: {exc}") from exc
+
+
+def _history_or_error(symbol: str, period: str):
+    try:
+        return fetch_history(symbol, period), None
+    except HTTPException as exc:
+        return None, exc.detail
+    except Exception as exc:
+        return None, str(exc)
+
+
+@ttl_cache(seconds=3600, maxsize=50)
+def cached_backtest(symbols: tuple[str, ...], period: str, **params) -> dict:
+    with ThreadPoolExecutor(max_workers=min(len(symbols) + 1, 10)) as pool:
+        fetched = dict(zip((*symbols, "SPY"), pool.map(lambda s: _history_or_error(s, period), (*symbols, "SPY"))))
+    spy = fetched.pop("SPY")[0]
+    histories = {s: h for s, (h, _) in fetched.items() if h is not None}
+    result = run_backtest(histories, benchmark=spy, **params)
+    result["errors"].update({s: err for s, (h, err) in fetched.items() if h is None})
+    result["period"] = period
+    return result
+
+
+@app.get("/api/backtest")
+def get_backtest(
+    symbols: str | None = None,
+    period: BacktestPeriod = "5y",
+    entry: Literal["buy_zone", "next_open"] = "buy_zone",
+    min_score: int = Query(3, ge=1, le=10),
+    max_hold: int = Query(60, ge=1, le=250),
+    entry_window: int = Query(10, ge=1, le=60),
+    cost_bps: float = Query(5.0, ge=0, le=100),
+):
+    """Replay the BUY signal and suggested levels over past data (cached 1 h)."""
+    return cached_backtest(
+        tuple(parse_symbols(symbols)),
+        period,
+        entry=entry,
+        min_score=min_score,
+        max_hold=max_hold,
+        entry_window=entry_window,
+        cost_bps=cost_bps,
+    )
 
 
 @app.get("/api/news/chips")

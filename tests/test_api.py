@@ -119,3 +119,13 @@ def test_groq_retired_model_switches_to_available_one(monkeypatch):
     monkeypatch.setattr(agent, "_available_groq_model", lambda key, exclude: "openai/gpt-oss-120b")
     assert agent._call_groq_messages([{"role": "user", "content": "hi"}], "retired-model") == "ok"
     assert used == ["retired-model", "openai/gpt-oss-120b"]
+
+
+def test_backtest_endpoint(client):
+    main.cached_backtest.cache_clear()
+    res = client.get("/api/backtest?symbols=AAPL&min_score=4&entry=next_open")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["params"]["min_score"] == 4
+    assert [s["symbol"] for s in body["symbols"]] == ["AAPL"]
+    assert client.get("/api/backtest?entry=bogus").status_code == 422

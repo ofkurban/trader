@@ -39,6 +39,10 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
 - Editable order plan (saved in browser local storage; checks stop < buy < take profit)
 - Yahoo responses cached in-process (prices 2 min, news 5 min) and fetched in parallel
 - Dashed lines on chart for each level
+- **Backtest** tab: replays the BUY score and suggested buy zone / stop / take profit
+  day by day (no look-ahead) and reports win rate, expectancy in R, profit factor,
+  drawdown, buy & hold vs SPY, and forward returns by action and score — so you
+  can see whether the signal actually has an edge before trusting it
 
 ## API
 
@@ -46,6 +50,7 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
 |----------|-------------|
 | `GET /api/watchlist` | All watchlist symbols with levels |
 | `GET /api/early-signals[?refresh=true]` | Top 10 early-signal stocks (cached 1 h) |
+| `GET /api/backtest?symbols=&period=5y&entry=buy_zone&min_score=3&max_hold=60&cost_bps=5` | Replay the BUY signal + levels on past data (cached 1 h) |
 | `GET /api/stock/{symbol}?period=1y` | History + levels for one symbol (`3mo`, `6mo`, `1y`, `2y`, `5y`, `ytd`, `max`) |
 | `POST /api/agent/chat/{symbol}` | Stock chat (used by the **Analyze setup** button) |
 | `POST /api/agent/analyze/{symbol}` | One-shot structured setup analysis |

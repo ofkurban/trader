@@ -27,6 +27,7 @@
     <nav class="tabs" role="tablist" aria-label="Views">
       <button type="button" class="tab active" role="tab" id="tab-dashboard" data-view="dashboard" aria-selected="true" aria-controls="view-dashboard">Dashboard</button>
       <button type="button" class="tab" role="tab" id="tab-signals" data-view="signals" aria-selected="false" aria-controls="view-signals">Early signals · Top 10</button>
+      <button type="button" class="tab" role="tab" id="tab-backtest" data-view="backtest" aria-selected="false" aria-controls="view-backtest">Backtest</button>
     </nav>
 
     <div id="view-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
@@ -326,6 +327,41 @@
         volume, earnings dates, sector ETFs and forward P/E. Yahoo only lists earnings dates, so
         FDA decisions, product launches and index additions are not detected — use the AI research
         prompt for those. Not financial advice.
+      </p>
+    </section>
+
+    <section id="view-backtest" class="signals-view backtest-view hidden" role="tabpanel" aria-labelledby="tab-backtest">
+      <div class="signals-head">
+        <div>
+          <h2>Backtest — does the BUY signal work?</h2>
+          <p class="muted">
+            Replays the app's BUY score and suggested buy zone, stop and take profit on past daily bars
+            for your watchlist, one day at a time with no look-ahead.
+          </p>
+        </div>
+      </div>
+      <form id="bt-form" class="bt-form">
+        <label>Period
+          <select id="bt-period"><option value="2y">2 years</option><option value="5y" selected>5 years</option><option value="max">Max</option></select>
+        </label>
+        <label>Entry
+          <select id="bt-entry">
+            <option value="buy_zone" selected>Limit at buy zone</option>
+            <option value="next_open">Next day's open</option>
+          </select>
+        </label>
+        <label>Min BUY score <input id="bt-min-score" type="number" min="1" max="10" value="3"></label>
+        <label>Max hold (days) <input id="bt-max-hold" type="number" min="1" max="250" value="60"></label>
+        <label>Cost per side (bps) <input id="bt-cost" type="number" min="0" max="100" step="1" value="5"></label>
+        <button id="bt-run-btn" type="submit">Run backtest</button>
+      </form>
+      <p id="bt-status" class="muted signals-status"></p>
+      <div id="bt-results" class="bt-results"></div>
+      <p class="disclaimer">
+        Uses today's watchlist, so stocks that were delisted or collapsed are missing (survivorship bias) —
+        real results would likely be worse. When the stop and target fall in the same daily bar the stop is
+        assumed to hit first. R = profit ÷ initial risk (entry − stop). Past results don't predict future
+        returns. Not financial advice.
       </p>
     </section>
   </div>
