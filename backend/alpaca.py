@@ -64,28 +64,37 @@ def _trading_url() -> str:
     return "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
 
 
-def _get(url: str, params: dict | None = None, timeout: float = 15) -> dict | list:
+def _request(
+    method: str, url: str, params: dict | None = None, body: dict | None = None, timeout: float = 15
+) -> dict | list | None:
     creds = _credentials()
     if not creds:
         raise AlpacaError("Alpaca keys not configured")
     if params:
         url = f"{url}?{urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})}"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "APCA-API-KEY-ID": creds[0],
-            "APCA-API-SECRET-KEY": creds[1],
-            "Accept": "application/json",
-        },
-    )
+    headers = {
+        "APCA-API-KEY-ID": creds[0],
+        "APCA-API-SECRET-KEY": creds[1],
+        "Accept": "application/json",
+    }
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            raw = resp.read()
+            return json.loads(raw.decode("utf-8")) if raw else None
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")[:200]
         raise AlpacaError(f"HTTP {exc.code}: {body}") from exc
     except (OSError, ValueError) as exc:
         raise AlpacaError(str(exc)) from exc
+
+
+def _get(url: str, params: dict | None = None, timeout: float = 15) -> dict | list:
+    return _request("GET", url, params=params, timeout=timeout)
 
 
 def to_alpaca_symbol(symbol: str) -> str:
@@ -248,6 +257,16 @@ def history(symbol: str, period: str = "1y") -> pd.DataFrame:
         },
         index=index,
     )
+
+
+def latest_trade_price(symbol: str) -> float | None:
+    """Last trade price (IEX feed, which the free plan allows in real time)."""
+    data = _get(
+        f"{DATA_URL}/v2/stocks/{urllib.parse.quote(to_alpaca_symbol(symbol), safe='')}/trades/latest",
+        {"feed": "iex"},
+    )
+    price = (data.get("trade") or {}).get("p")
+    return float(price) if price else None
 
 
 # ---- News (Benzinga via Alpaca) ----

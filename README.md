@@ -53,6 +53,11 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
   track each open trade's 4× ATR trailing stop with a "stop hit" alert, and review closed
   trades with the backtest's stats plus discipline checks (share taken on a BUY signal,
   blown stops). Saved in the browser — Export/Import to back up or move devices
+- **Alpaca paper trading** (paper keys only — live keys are refused): "Place paper order"
+  sends a limit buy with a stop loss that arms on fill; the journal syncs fills and
+  stop-outs, offers "Raise stop → trail" to move the Alpaca stop up to the 4× ATR
+  trailing stop, and "Sell at market". On a public deploy this needs `APP_PASSWORD`
+  set, so strangers can't trade the account
 
 ## API
 
@@ -77,8 +82,6 @@ Tests stub out Yahoo, so they run offline.
 
 ## Next steps
 
-- Connect [Alpaca paper trading](https://alpaca.markets/) for real limit/stop orders
-  (and sync fills into the journal)
 - Add price alerts when a symbol enters the buy zone
 - Optional: replace Yahoo delayed quotes with Alpaca market data
 

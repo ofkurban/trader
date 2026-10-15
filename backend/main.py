@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import date
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -9,12 +10,12 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 import yfinance as yf
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
-from backend import alpaca
+from backend import alpaca, broker
 from backend.auth import basic_auth_middleware
 from backend.backtest import run_backtest
 from backend.cache import ttl_cache
@@ -86,6 +87,44 @@ class ClosedTrade(_JournalTrade):
     exit_price: float = Field(gt=0)
     shares: float = Field(gt=0)
     signal_action: Literal["BUY", "HOLD", "SELL"] | None = None
+
+
+TRADE_ID = r"^[A-Za-z0-9-]{1,48}$"
+ORDER_ID = r"^[A-Za-z0-9-]{1,64}$"
+
+
+class BrokerOrder(BaseModel):
+    trade_id: str = Field(pattern=TRADE_ID)
+    symbol: str = Field(min_length=1, max_length=20)
+    qty: int = Field(ge=1, le=broker.MAX_QTY)
+    limit_price: float = Field(gt=0)
+    stop_price: float = Field(gt=0)
+
+
+class BrokerSyncItem(BaseModel):
+    trade_id: str = Field(pattern=TRADE_ID)
+    order_id: str = Field(pattern=ORDER_ID)
+    exit_order_id: str | None = Field(default=None, pattern=ORDER_ID)
+
+
+class BrokerSync(BaseModel):
+    trades: list[BrokerSyncItem] = Field(max_length=200)
+
+
+class BrokerStop(BaseModel):
+    stop_order_id: str = Field(pattern=ORDER_ID)
+    stop_price: float = Field(gt=0)
+
+
+class BrokerCancel(BaseModel):
+    order_id: str = Field(pattern=ORDER_ID)
+
+
+class BrokerClose(BaseModel):
+    trade_id: str = Field(pattern=TRADE_ID)
+    symbol: str = Field(min_length=1, max_length=20)
+    qty: int = Field(ge=1, le=broker.MAX_QTY)
+    stop_order_id: str | None = Field(default=None, pattern=ORDER_ID)
 
 
 class JournalReview(BaseModel):
@@ -308,6 +347,97 @@ def journal_review(body: JournalReview):
     closed = [{**t.model_dump(), "entry_date": t.entry_date.isoformat(), "exit_date": t.exit_date.isoformat()}
               for t in body.closed]
     return {"marks": marks, **review_closed(closed)}
+
+
+# ---- Paper trading (Alpaca) ----
+
+LOCAL_CLIENTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+
+
+def _orders_blocked(request: Request) -> tuple[int, str] | None:
+    reason = broker.unavailable_reason()
+    if reason:
+        return 503, reason
+    # A public deploy without a password would let anyone trade the account
+    host = request.client.host if request.client else ""
+    if not os.getenv("APP_PASSWORD") and host not in LOCAL_CLIENTS:
+        return 403, "Set APP_PASSWORD on the server before using paper trading on a public deploy."
+    return None
+
+
+def require_paper_trading(request: Request) -> None:
+    blocked = _orders_blocked(request)
+    if blocked:
+        raise HTTPException(status_code=blocked[0], detail=blocked[1])
+
+
+def _broker_call(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except broker.BrokerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/broker/status")
+def broker_status(request: Request):
+    blocked = _orders_blocked(request)
+    if blocked:
+        return {"enabled": False, "reason": blocked[1]}
+    try:
+        return {"enabled": True, "paper": True, "account": broker.account()}
+    except broker.BrokerError as exc:
+        return {"enabled": False, "reason": f"Alpaca account unavailable: {exc}"}
+
+
+@app.post("/api/broker/orders", dependencies=[Depends(require_paper_trading)])
+def broker_place(body: BrokerOrder):
+    symbol = normalize_symbol(body.symbol)
+    if not alpaca.lists(symbol):
+        raise HTTPException(status_code=400, detail=f"{symbol} isn't tradable on Alpaca.")
+    return _broker_call(
+        broker.place_entry,
+        trade_id=body.trade_id,
+        symbol=symbol,
+        qty=body.qty,
+        limit_price=body.limit_price,
+        stop_price=body.stop_price,
+    )
+
+
+@app.post("/api/broker/sync", dependencies=[Depends(require_paper_trading)])
+def broker_sync(body: BrokerSync):
+    """Current order state for each journal trade (errors reported per trade)."""
+
+    def one(item: BrokerSyncItem) -> dict:
+        try:
+            return broker.trade_state(item.order_id, item.exit_order_id)
+        except broker.BrokerError as exc:
+            return {"error": str(exc)}
+
+    with ThreadPoolExecutor(max_workers=min(len(body.trades), 8) or 1) as pool:
+        return {"trades": dict(zip((t.trade_id for t in body.trades), pool.map(one, body.trades)))}
+
+
+@app.post("/api/broker/stop", dependencies=[Depends(require_paper_trading)])
+def broker_raise_stop(body: BrokerStop):
+    return _broker_call(broker.raise_stop, body.stop_order_id, body.stop_price)
+
+
+@app.post("/api/broker/cancel", dependencies=[Depends(require_paper_trading)])
+def broker_cancel(body: BrokerCancel):
+    _broker_call(broker.cancel, body.order_id)
+    return {"ok": True}
+
+
+@app.post("/api/broker/close", dependencies=[Depends(require_paper_trading)])
+def broker_close(body: BrokerClose):
+    return _broker_call(
+        broker.close_trade,
+        trade_id=body.trade_id,
+        symbol=normalize_symbol(body.symbol),
+        qty=body.qty,
+        stop_order_id=body.stop_order_id,
+    )
 
 
 @app.get("/api/news/chips")

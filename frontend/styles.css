@@ -1948,3 +1948,35 @@ button:disabled {
 .sizing-info.over-rule {
   color: var(--yellow);
 }
+
+/* ---- Paper trading ---- */
+
+button.paper-btn {
+  background: var(--purple);
+}
+
+.broker-info {
+  font-size: 0.85rem;
+  margin: 0.6rem 0 0;
+}
+
+.j-paper {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  color: var(--purple);
+  border: 1px solid rgba(199, 146, 234, 0.45);
+  vertical-align: middle;
+}
+
+.j-warn {
+  color: var(--yellow);
+  font-size: 0.8rem;
+}
+
+.bt-table tr.j-dim td {
+  opacity: 0.55;
+}

@@ -59,6 +59,8 @@ const els = {
   sizingInfo: document.getElementById("sizing-info"),
   sizeBtn: document.getElementById("size-btn"),
   logTradeBtn: document.getElementById("log-trade-btn"),
+  paperOrderBtn: document.getElementById("paper-order-btn"),
+  brokerInfo: document.getElementById("broker-info"),
   planMessage: document.getElementById("plan-message"),
   symbolSearch: document.getElementById("symbol-search"),
   symbolInput: document.getElementById("symbol-input"),
@@ -1650,6 +1652,13 @@ let journal = loadJournal();
 let journalMarks = {};
 let journalSeq = 0;
 
+// Another tab changed the journal: reload so this tab doesn't overwrite it
+window.addEventListener("storage", (e) => {
+  if (e.key !== JOURNAL_KEY) return;
+  journal = loadJournal();
+  if (!document.getElementById("view-journal").classList.contains("hidden")) refreshJournal();
+});
+
 function saveJournal() {
   try {
     localStorage.setItem(JOURNAL_KEY, JSON.stringify(journal));
@@ -1741,8 +1750,8 @@ els.sizeBtn.addEventListener("click", () => {
   updateSizingInfo();
 });
 
-els.logTradeBtn.addEventListener("click", () => {
-  if (!currentSymbol || !currentLevels) return;
+function newTradeFromPlan(action) {
+  if (!currentSymbol || !currentLevels) return null;
   const plan = {
     buy: Number(els.inputBuy.value),
     takeProfit: Number(els.inputTakeProfit.value),
@@ -1751,16 +1760,16 @@ els.logTradeBtn.addEventListener("click", () => {
   };
   const problem = validatePlan(plan);
   if (problem) {
-    els.planMessage.textContent = `Not logged: ${problem}`;
-    return;
+    els.planMessage.textContent = `Not ${action}: ${problem}`;
+    return null;
   }
   const entryDate = els.inputEntryDate.value || todayIso();
   if (entryDate > todayIso()) {
-    els.planMessage.textContent = "Not logged: entry date is in the future.";
-    return;
+    els.planMessage.textContent = `Not ${action}: entry date is in the future.`;
+    return null;
   }
   const rec = currentLevels.recommendation || {};
-  journal.trades.push({
+  return {
     id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
     symbol: currentSymbol,
     entryDate,
@@ -1772,16 +1781,127 @@ els.logTradeBtn.addEventListener("click", () => {
     signal: { action: rec.action ?? null, score: rec.score ?? null, relStrength: currentLevels.rel_strength_6m ?? null },
     notes: els.inputNotes.value.trim(),
     loggedAt: new Date().toISOString(),
-  });
+  };
+}
+
+els.logTradeBtn.addEventListener("click", () => {
+  const trade = newTradeFromPlan("logged");
+  if (!trade) return;
+  journal.trades.push(trade);
   if (saveJournal()) {
-    els.planMessage.textContent = `Logged ${plural(plan.shares, "share")} of ${currentSymbol} at ${formatMoney(plan.buy)} — see the Journal tab.`;
+    els.planMessage.textContent = `Logged ${plural(trade.shares, "share")} of ${trade.symbol} at ${formatMoney(trade.entry)} — see the Journal tab.`;
     els.inputNotes.value = "";
   }
 });
 
+// ---- Alpaca paper trading ----
+
+let brokerEnabled = false;
+
+async function loadBrokerStatus() {
+  try {
+    const status = await fetchJson(`${API}/broker/status`);
+    brokerEnabled = Boolean(status.enabled);
+    els.paperOrderBtn.classList.toggle("hidden", !brokerEnabled);
+    if (brokerEnabled) {
+      const a = status.account;
+      els.brokerInfo.textContent = `Alpaca paper account · equity ${formatMoney(a.equity)} · buying power ${formatMoney(a.buying_power)}`;
+      if (!els.inputAccount.value) {
+        els.inputAccount.value = Math.round(a.equity);
+        saveRiskSettings();
+        updateSizingInfo();
+      }
+    } else {
+      els.brokerInfo.textContent = /not configured/.test(status.reason || "") ? "" : `Paper trading off: ${status.reason}`;
+    }
+    els.brokerInfo.classList.toggle("hidden", !els.brokerInfo.textContent);
+    // The journal may have rendered before we knew Alpaca was available
+    if (brokerEnabled && !document.getElementById("view-journal").classList.contains("hidden")) refreshJournal();
+  } catch {
+    brokerEnabled = false;
+  }
+}
+
+els.paperOrderBtn.addEventListener("click", async () => {
+  const trade = newTradeFromPlan("sent");
+  if (!trade) return;
+  if (!Number.isInteger(trade.shares)) {
+    els.planMessage.textContent = "Not sent: paper orders need a whole number of shares.";
+    return;
+  }
+  trade.entryDate = todayIso();
+  els.paperOrderBtn.disabled = true;
+  els.planMessage.textContent = "Sending paper order to Alpaca…";
+  try {
+    const res = await postJson(`${API}/broker/orders`, {
+      trade_id: trade.id,
+      symbol: trade.symbol,
+      qty: trade.shares,
+      limit_price: trade.entry,
+      stop_price: trade.stop,
+    });
+    trade.broker = { orderId: res.entry.id, status: "pending" };
+    applyBrokerState(trade, res);
+    journal.trades.push(trade);
+    saveJournal();
+    els.planMessage.textContent =
+      `Paper order sent: buy ${plural(trade.shares, "share")} of ${trade.symbol} at ${formatMoney(trade.entry)} limit, ` +
+      `stop ${formatMoney(trade.stop)} arms when it fills. Track it in the Journal tab.`;
+    els.inputNotes.value = "";
+  } catch (err) {
+    els.planMessage.textContent = `Order not placed: ${err.message}`;
+  } finally {
+    els.paperOrderBtn.disabled = false;
+  }
+});
+
+function nyDate(timestamp) {
+  return new Date(timestamp).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+}
+
+// Fold Alpaca's order state into the journal trade
+function applyBrokerState(t, s) {
+  if (s.error) {
+    t.broker.error = s.error;
+    return;
+  }
+  delete t.broker.error;
+  const e = s.entry;
+  if (e.filled_qty > 0 && t.exit == null) {
+    Object.assign(t, { entry: e.filled_avg_price, shares: e.filled_qty, entryDate: nyDate(e.filled_at || e.submitted_at) });
+    if (t.broker.status === "pending") t.broker.status = "filled";
+  } else if (["canceled", "expired", "rejected"].includes(e.status) && t.broker.status === "pending") {
+    t.broker.status = "cancelled";
+  }
+  if (s.stop) {
+    Object.assign(t.broker, { stopOrderId: s.stop.id, stopPrice: s.stop.stop_price });
+    if (s.stop.status === "filled" && t.exit == null) {
+      Object.assign(t, { exit: s.stop.filled_avg_price, exitDate: nyDate(s.stop.filled_at) });
+      t.broker.status = "closed";
+    }
+  }
+  if (s.exit?.status === "filled" && t.exit == null) {
+    Object.assign(t, { exit: s.exit.filled_avg_price, exitDate: nyDate(s.exit.filled_at) });
+    t.broker.status = "closed";
+  }
+}
+
+async function syncBroker() {
+  const live = journal.trades.filter((t) => t.broker && ["pending", "filled"].includes(t.broker.status));
+  if (!brokerEnabled || !live.length) return null;
+  const res = await postJson(`${API}/broker/sync`, {
+    trades: live.map((t) => ({ trade_id: t.id, order_id: t.broker.orderId, exit_order_id: t.broker.exitOrderId ?? null })),
+  });
+  for (const t of live) if (res.trades[t.id]) applyBrokerState(t, res.trades[t.id]);
+  saveJournal();
+  return live.filter((t) => t.broker.error).length;
+}
+
 // ---- Journal view ----
 
-const openTrades = () => journal.trades.filter((t) => t.exit == null);
+const brokerState = (t) => t.broker?.status;
+const pendingTrades = () => journal.trades.filter((t) => ["pending", "cancelled"].includes(brokerState(t)));
+const openTrades = () => journal.trades.filter((t) => t.exit == null && !["pending", "cancelled"].includes(brokerState(t)));
 const closedTrades = () => journal.trades.filter((t) => t.exit != null);
 
 function tradeR(t, price) {
@@ -1820,40 +1940,83 @@ function renderJournalSummary(review) {
     </div>`;
 }
 
+const paperTag = (t) => (t.broker ? ` <span class="j-paper" title="Alpaca paper order">paper</span>` : "");
+
+// Two clicks instead of a confirm() dialog
+function armedButton(cls, label) {
+  return `<button type="button" class="${cls}" data-label="${escapeHtml(label)}">${escapeHtml(label)}</button>`;
+}
+
+function pendingRow(t) {
+  const cancelled = brokerState(t) === "cancelled";
+  const ageDays = Math.round((Date.parse(todayIso()) - Date.parse(t.entryDate)) / 86400000);
+  // The backtest only waits 10 trading days (~2 weeks) for the buy zone to fill
+  const stale = !cancelled && ageDays > 14;
+  const status = t.broker.error
+    ? `<span class="j-alert" title="${escapeHtml(t.broker.error)}">sync failed</span>`
+    : cancelled
+      ? `<span class="muted">Order cancelled</span>`
+      : `<span class="muted">Limit order pending${ageDays ? ` · ${plural(ageDays, "day")}` : ""}</span>` +
+        (stale ? `<br><span class="j-warn">Past the backtest's 2-week window — consider cancelling</span>` : "");
+  return `<tr data-id="${escapeHtml(t.id)}" class="${cancelled ? "j-dim" : ""}">
+    <td>${escapeHtml(t.symbol)}${paperTag(t)}</td><td>${escapeHtml(t.entryDate)}</td><td>${formatMoney(t.entry)}</td>
+    <td>${t.shares}</td><td>${formatMoney(t.stop)}</td><td>—</td><td>—</td><td>—</td><td>—</td>
+    <td>${status}</td>
+    <td class="j-actions">${cancelled ? armedButton("link-btn j-delete", "Delete") : armedButton("secondary j-cancel-order", "Cancel order")}</td></tr>`;
+}
+
+function openRow(t) {
+  const m = journalMarks[t.id];
+  const ok = m && !m.error;
+  const price = ok ? m.price : null;
+  const b = t.broker;
+  let status = !m
+    ? `<span class="muted">…</span>`
+    : m.error
+      ? `<span class="muted" title="${escapeHtml(m.error)}">no data</span>`
+      : m.stop_hit
+        ? `<span class="j-alert">Trail stop hit ${escapeHtml(m.stop_hit.date)} at ${formatMoney(m.stop_hit.stop)} — exit</span>`
+        : `<span class="j-ok">Hold · locks ${fmtR(m.locked_r)}</span>`;
+  let actions;
+  if (b) {
+    if (b.error) status += `<br><span class="j-alert" title="${escapeHtml(b.error)}">Alpaca sync failed</span>`;
+    if (b.exitOrderId) {
+      status = `<span class="muted">Sell order sent — waiting for fill</span>`;
+      actions = "";
+    } else {
+      if (b.stopPrice != null) status += `<br><span class="muted">Alpaca stop ${formatMoney(b.stopPrice)}</span>`;
+      const canRaise = ok && !m.stop_hit && b.stopOrderId && m.trail_stop > (b.stopPrice ?? 0) + 0.005;
+      actions =
+        (canRaise
+          ? `<button type="button" class="secondary j-raise-stop" data-stop="${m.trail_stop}">Raise stop → ${formatMoney(m.trail_stop)}</button>`
+          : "") + armedButton("secondary j-sell", "Sell at market");
+    }
+  } else {
+    actions = `
+      <span class="j-close-form hidden">
+        <input type="number" class="j-exit-price" step="0.01" min="0" value="${m?.stop_hit ? m.stop_hit.stop : price ?? ""}" aria-label="Exit price">
+        <input type="date" class="j-exit-date" value="${m?.stop_hit ? m.stop_hit.date : todayIso()}" aria-label="Exit date">
+        <button type="button" class="j-confirm-close">Save</button>
+      </span>
+      <button type="button" class="secondary j-close">Close</button>
+      ${armedButton("link-btn j-delete", "Delete")}`;
+  }
+  return `<tr data-id="${escapeHtml(t.id)}">
+    <td>${escapeHtml(t.symbol)}${paperTag(t)}</td><td>${escapeHtml(t.entryDate)}</td><td>${formatMoney(t.entry)}</td>
+    <td>${t.shares}</td><td>${formatMoney(t.stop)}</td>
+    <td>${price != null ? formatMoney(price) : "—"}</td>
+    <td>${ok ? formatMoney(m.trail_stop) : "—"}</td>
+    <td class="${pctClass(m?.open_r)}">${ok ? fmtR(m.open_r) : "—"}</td>
+    <td class="${pctClass(price != null ? price - t.entry : null)}">${price != null ? formatSignedMoney((price - t.entry) * t.shares) : "—"}</td>
+    <td>${status}</td>
+    <td class="j-actions">${actions}</td></tr>`;
+}
+
 function renderJournalTables() {
-  const open = openTrades();
-  jEls.open.innerHTML = open.length
-    ? open
-        .map((t) => {
-          const m = journalMarks[t.id];
-          const price = m && !m.error ? m.price : null;
-          const status = !m
-            ? `<span class="muted">…</span>`
-            : m.error
-              ? `<span class="muted" title="${escapeHtml(m.error)}">no data</span>`
-              : m.stop_hit
-                ? `<span class="j-alert">Stop hit ${escapeHtml(m.stop_hit.date)} at ${formatMoney(m.stop_hit.stop)} — exit</span>`
-                : `<span class="j-ok">Hold · locks ${fmtR(m.locked_r)}</span>`;
-          return `<tr data-id="${escapeHtml(t.id)}">
-            <td>${escapeHtml(t.symbol)}</td><td>${escapeHtml(t.entryDate)}</td><td>${formatMoney(t.entry)}</td>
-            <td>${t.shares}</td><td>${formatMoney(t.stop)}</td>
-            <td>${price != null ? formatMoney(price) : "—"}</td>
-            <td>${m && !m.error ? formatMoney(m.trail_stop) : "—"}</td>
-            <td class="${pctClass(m?.open_r)}">${m && !m.error ? fmtR(m.open_r) : "—"}</td>
-            <td class="${pctClass(price != null ? price - t.entry : null)}">${price != null ? formatSignedMoney((price - t.entry) * t.shares) : "—"}</td>
-            <td>${status}</td>
-            <td class="j-actions">
-              <span class="j-close-form hidden">
-                <input type="number" class="j-exit-price" step="0.01" min="0" value="${m?.stop_hit ? m.stop_hit.stop : price ?? ""}" aria-label="Exit price">
-                <input type="date" class="j-exit-date" value="${m?.stop_hit ? m.stop_hit.date : todayIso()}" aria-label="Exit date">
-                <button type="button" class="j-confirm-close">Save</button>
-              </span>
-              <button type="button" class="secondary j-close">Close</button>
-              <button type="button" class="link-btn j-delete">Delete</button>
-            </td></tr>`;
-        })
-        .join("")
-    : `<tr><td colspan="11" class="muted">No open trades. Log one from the order plan on the dashboard.</td></tr>`;
+  const rows = [...openTrades().map(openRow), ...pendingTrades().map(pendingRow)];
+  jEls.open.innerHTML = rows.length
+    ? rows.join("")
+    : `<tr><td colspan="11" class="muted">No open trades. Log one or place a paper order from the order plan on the dashboard.</td></tr>`;
 
   const closed = closedTrades().sort((a, b) => (a.exitDate < b.exitDate ? 1 : -1));
   jEls.closed.innerHTML = closed.length
@@ -1862,13 +2025,13 @@ function renderJournalTables() {
           const r = tradeR(t, t.exit);
           const action = t.signal?.action;
           return `<tr data-id="${escapeHtml(t.id)}">
-            <td>${escapeHtml(t.symbol)}</td><td>${escapeHtml(t.entryDate)}</td><td>${escapeHtml(t.exitDate)}</td>
+            <td>${escapeHtml(t.symbol)}${paperTag(t)}</td><td>${escapeHtml(t.entryDate)}</td><td>${escapeHtml(t.exitDate)}</td>
             <td>${formatMoney(t.entry)}</td><td>${formatMoney(t.exit)}</td><td>${t.shares}</td>
             <td class="${pctClass(r)}">${fmtR(r)}</td>
             <td class="${pctClass(t.exit - t.entry)}">${formatSignedMoney((t.exit - t.entry) * t.shares)}</td>
             <td><span class="j-signal ${(action || "none").toLowerCase()}">${escapeHtml(action || "—")}${t.signal?.score != null ? ` ${t.signal.score > 0 ? "+" : ""}${t.signal.score}` : ""}</span></td>
             <td class="j-notes" title="${escapeHtml(t.notes || "")}">${escapeHtml(t.notes || "")}</td>
-            <td class="j-actions"><button type="button" class="link-btn j-reopen">Reopen</button><button type="button" class="link-btn j-delete">Delete</button></td></tr>`;
+            <td class="j-actions">${t.broker ? "" : `<button type="button" class="link-btn j-reopen">Reopen</button>`}${armedButton("link-btn j-delete", "Delete")}</td></tr>`;
         })
         .join("")
     : `<tr><td colspan="11" class="muted">No closed trades yet.</td></tr>`;
@@ -1877,11 +2040,20 @@ function renderJournalTables() {
 async function refreshJournal() {
   const seq = ++journalSeq;
   renderJournalTables();
+  let syncNote = "";
+  try {
+    const failed = await syncBroker();
+    if (failed) syncNote = ` ${plural(failed, "paper order")} couldn't be synced.`;
+  } catch (err) {
+    syncNote = ` Alpaca sync failed: ${err.message}`;
+  }
+  if (seq !== journalSeq) return;
+  renderJournalTables();
   const open = openTrades();
   const closed = closedTrades();
   if (!open.length && !closed.length) {
     renderJournalSummary(null);
-    jEls.status.textContent = "";
+    jEls.status.textContent = syncNote.trim();
     return;
   }
   jEls.status.textContent = open.length ? "Updating prices and trailing stops…" : "";
@@ -1904,11 +2076,12 @@ async function refreshJournal() {
     renderJournalSummary(review);
     renderJournalTables();
     const hits = Object.values(review.marks).filter((m) => m.stop_hit).length;
-    jEls.status.textContent = hits
-      ? `${hits} open trade${hits > 1 ? "s have" : " has"} hit the trailing stop — close ${hits > 1 ? "them" : "it"} to follow the system.`
-      : open.length
-        ? `Updated ${new Date().toLocaleTimeString()}.`
-        : "";
+    jEls.status.textContent =
+      (hits
+        ? `${hits} open trade${hits > 1 ? "s have" : " has"} hit the trailing stop — close ${hits > 1 ? "them" : "it"} to follow the system.`
+        : open.length
+          ? `Updated ${new Date().toLocaleTimeString()}.`
+          : "") + syncNote;
   } catch (err) {
     if (seq !== journalSeq) return;
     jEls.status.textContent = `Review failed: ${err.message}`;
@@ -1917,6 +2090,31 @@ async function refreshJournal() {
 
 function tradeById(id) {
   return journal.trades.find((t) => t.id === id);
+}
+
+// First click arms the button; a second click within 3 s confirms
+function confirmed(btn) {
+  if (btn.dataset.armed) return true;
+  btn.dataset.armed = "1";
+  btn.textContent = `Sure? ${btn.dataset.label}`;
+  setTimeout(() => {
+    delete btn.dataset.armed;
+    btn.textContent = btn.dataset.label;
+  }, 3000);
+  return false;
+}
+
+async function brokerAction(btn, fn) {
+  btn.disabled = true;
+  try {
+    await fn();
+  } catch (err) {
+    jEls.status.textContent = `Alpaca: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+  saveJournal();
+  refreshJournal();
 }
 
 function onJournalClick(e) {
@@ -1945,19 +2143,37 @@ function onJournalClick(e) {
     saveJournal();
     refreshJournal();
   } else if (btn.classList.contains("j-delete")) {
-    // Two clicks instead of a confirm() dialog
-    if (btn.dataset.armed) {
-      journal.trades = journal.trades.filter((t) => t.id !== trade.id);
-      saveJournal();
-      refreshJournal();
-    } else {
-      btn.dataset.armed = "1";
-      btn.textContent = "Sure? Delete";
-      setTimeout(() => {
-        delete btn.dataset.armed;
-        btn.textContent = "Delete";
-      }, 3000);
-    }
+    if (!confirmed(btn)) return;
+    journal.trades = journal.trades.filter((t) => t.id !== trade.id);
+    saveJournal();
+    refreshJournal();
+  } else if (btn.classList.contains("j-cancel-order")) {
+    if (!confirmed(btn)) return;
+    brokerAction(btn, async () => {
+      await postJson(`${API}/broker/cancel`, { order_id: trade.broker.orderId });
+      jEls.status.textContent = `Cancel sent for ${trade.symbol}.`;
+    });
+  } else if (btn.classList.contains("j-raise-stop")) {
+    brokerAction(btn, async () => {
+      const leg = await postJson(`${API}/broker/stop`, {
+        stop_order_id: trade.broker.stopOrderId,
+        stop_price: Number(btn.dataset.stop),
+      });
+      Object.assign(trade.broker, { stopOrderId: leg.id, stopPrice: leg.stop_price });
+      jEls.status.textContent = `${trade.symbol} stop raised to ${formatMoney(leg.stop_price)} at Alpaca.`;
+    });
+  } else if (btn.classList.contains("j-sell")) {
+    if (!confirmed(btn)) return;
+    brokerAction(btn, async () => {
+      const order = await postJson(`${API}/broker/close`, {
+        trade_id: trade.id,
+        symbol: trade.symbol,
+        qty: trade.shares,
+        stop_order_id: trade.broker.stopOrderId ?? null,
+      });
+      trade.broker.exitOrderId = order.id;
+      jEls.status.textContent = `Market sell sent for ${trade.symbol}; it fills at the next market price.`;
+    });
   }
 }
 
@@ -2017,6 +2233,7 @@ async function init() {
       loadWatchlist(),
       loadSectorNews(),
       loadAgentStatus(),
+      loadBrokerStatus(),
     ]);
     // Overnight is heavier / more fragile — don't block the whole dashboard
     loadOvernight().catch(() => {});
