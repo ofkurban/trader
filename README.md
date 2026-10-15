@@ -43,6 +43,10 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
   day by day (no look-ahead) and reports win rate, expectancy in R, profit factor,
   drawdown, buy & hold vs SPY, and forward returns by action and score — so you
   can see whether the signal actually has an edge before trusting it
+- BUY/HOLD/SELL score includes **relative strength vs SPY** (6-month return, ±2 points
+  beyond ±10 pts) and gives no "oversold bounce" credit below SMA200. Tested on ~180
+  US stocks split into 2021–24 and 2024–26: it was the only change that improved both
+  halves. The backtest also favors a **4× ATR trailing stop** over a fixed take profit
 
 ## API
 
@@ -50,7 +54,7 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
 |----------|-------------|
 | `GET /api/watchlist` | All watchlist symbols with levels |
 | `GET /api/early-signals[?refresh=true]` | Top 10 early-signal stocks (cached 1 h) |
-| `GET /api/backtest?symbols=&period=5y&entry=buy_zone&min_score=3&max_hold=60&cost_bps=5` | Replay the BUY signal + levels on past data (cached 1 h) |
+| `GET /api/backtest?symbols=&period=5y&entry=buy_zone&exit=trail&min_score=3&max_hold=250&cost_bps=5` | Replay the BUY signal + levels on past data (cached 1 h) |
 | `GET /api/stock/{symbol}?period=1y` | History + levels for one symbol (`3mo`, `6mo`, `1y`, `2y`, `5y`, `ytd`, `max`) |
 | `POST /api/agent/chat/{symbol}` | Stock chat (used by the **Analyze setup** button) |
 | `POST /api/agent/analyze/{symbol}` | One-shot structured setup analysis |

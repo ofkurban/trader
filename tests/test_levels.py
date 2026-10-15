@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 import backend.levels as lv
-from backend.levels import MARKET_TZ, _open_session_fraction, compute_levels
+from backend.levels import MARKET_TZ, _open_session_fraction, compute_levels, compute_recommendation
 
 
 def make_hist(closes, volume=None, end="2026-09-30"):
@@ -71,3 +71,30 @@ def test_completed_session_volume_ratio():
     levels = compute_levels(make_hist(np.linspace(100, 200, 250), volume=volume))
     assert levels["volume_partial_session"] is False
     assert levels["volume_signal"] == "high"
+
+
+BASE = dict(last=110, sma20=105, sma50=100, sma200=90, rsi14=50, volume_ratio=1.0,
+            support=80, resistance=130, risk_reward=1.5)
+
+
+@pytest.mark.parametrize("rs,delta", [(None, 0), (5, 0), (15, 2), (-15, -2)])
+def test_relative_strength_points(rs, delta):
+    base = compute_recommendation(**BASE)["score"]
+    assert compute_recommendation(**BASE, rel_strength=rs)["score"] == base + delta
+
+
+def test_no_oversold_credit_in_downtrend():
+    down = {**BASE, "last": 85, "sma20": 90, "sma50": 95, "sma200": 100, "rsi14": 25}
+    neutral = compute_recommendation(**{**down, "rsi14": 50})["score"]
+    assert compute_recommendation(**down)["score"] == neutral
+    up = {**BASE, "rsi14": 25}
+    assert compute_recommendation(**up)["score"] == compute_recommendation(**BASE)["score"] + 2
+
+
+def test_relative_strength_vs_benchmark():
+    stock = make_hist(np.linspace(100, 200, 250))
+    flat = make_hist(np.full(250, 50.0))["Close"]
+    levels = compute_levels(stock, flat)
+    expected = (stock["Close"].iloc[-1] / stock["Close"].iloc[-127] - 1) * 100
+    assert levels["rel_strength_6m"] == pytest.approx(expected, abs=0.05)
+    assert any("Beat SPY" in r for r in levels["recommendation"]["reasons"])

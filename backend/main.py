@@ -99,6 +99,15 @@ def market_levels() -> dict | None:
         return None
 
 
+def benchmark_close():
+    """SPY closes for the relative-strength score; the score skips it if SPY fails."""
+    try:
+        return fetch_history("SPY", "1y")["Close"]
+    except Exception:
+        log.warning("SPY history unavailable; scoring without relative strength")
+        return None
+
+
 def build_system(symbol: str, hist, levels: dict) -> dict | None:
     try:
         return compute_system(
@@ -116,7 +125,7 @@ def load_levels(symbol: str, period: str = "1y"):
     """History + computed levels, with 'too little history' reported as a 422."""
     hist, source = fetch_history_with_source(symbol, period)
     try:
-        return hist, compute_levels(hist), source
+        return hist, compute_levels(hist, benchmark_close()), source
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"{symbol} ({period}): {exc}") from exc
 
@@ -124,7 +133,7 @@ def load_levels(symbol: str, period: str = "1y"):
 def _watchlist_item(symbol: str) -> dict:
     item = {"symbol": symbol, "name": lookup_name(symbol)}
     try:
-        item.update(compute_levels(fetch_history(symbol)))
+        item.update(compute_levels(fetch_history(symbol), benchmark_close()))
     except HTTPException as exc:
         item["error"] = exc.detail
     except Exception as exc:
@@ -218,8 +227,9 @@ def get_backtest(
     symbols: str | None = None,
     period: BacktestPeriod = "5y",
     entry: Literal["buy_zone", "next_open"] = "buy_zone",
-    min_score: int = Query(3, ge=1, le=10),
-    max_hold: int = Query(60, ge=1, le=250),
+    exit: Literal["trail", "target"] = "trail",
+    min_score: int = Query(3, ge=1, le=12),
+    max_hold: int = Query(250, ge=1, le=500),
     entry_window: int = Query(10, ge=1, le=60),
     cost_bps: float = Query(5.0, ge=0, le=100),
 ):
@@ -228,6 +238,7 @@ def get_backtest(
         tuple(parse_symbols(symbols)),
         period,
         entry=entry,
+        exit=exit,
         min_score=min_score,
         max_hold=max_hold,
         entry_window=entry_window,

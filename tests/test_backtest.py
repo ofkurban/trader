@@ -22,12 +22,18 @@ def wavy(n=600):
     return 100 + 0.1 * t + 12 * np.sin(t / 15)
 
 
-def test_last_row_matches_compute_levels():
+@pytest.mark.parametrize("with_benchmark", [False, True])
+def test_last_row_matches_compute_levels(with_benchmark):
     hist = make_hist(wavy())
-    row = score_frame(indicator_frame(hist)).iloc[-1]
-    levels = compute_levels(hist)
+    bench = make_hist(np.linspace(100, 130, 600))["Close"] if with_benchmark else None
+    row = score_frame(indicator_frame(hist, bench)).iloc[-1]
+    levels = compute_levels(hist, bench)
     for key in ("buy_low", "buy_high", "take_profit", "stop_loss", "risk_reward_now", "rsi14", "volume_ratio"):
         assert row[key] == pytest.approx(levels[key], abs=0.011), key
+    if with_benchmark:
+        assert row["rel_strength"] == pytest.approx(levels["rel_strength_6m"], abs=0.051)
+    else:
+        assert levels["rel_strength_6m"] is None
     assert row["action"] == levels["recommendation"]["action"]
     assert row["score"] == levels["recommendation"]["score"]
 
@@ -47,14 +53,14 @@ def bars(rows, **signal):
 
 def test_buy_zone_fill_then_target():
     frame = bars([(102, 103, 101, 102), (101, 101, 99, 100), (101, 111, 100, 110)])
-    [t] = simulate(frame, start=0, cost_bps=0)
+    [t] = simulate(frame, start=0, cost_bps=0, exit="target")
     assert (t["entry"], t["exit"], t["reason"]) == (100, 110, "target")
     assert t["r"] == pytest.approx(2.0)
 
 
 def test_gap_down_fills_at_open_and_stop_wins_ties():
     frame = bars([(102, 103, 101, 102), (98, 99, 97, 98), (98, 111, 94, 100)])
-    [t] = simulate(frame, start=0, cost_bps=0)
+    [t] = simulate(frame, start=0, cost_bps=0, exit="target")
     assert t["entry"] == 98
     assert (t["exit"], t["reason"]) == (95, "stop")
     assert t["r"] == pytest.approx(-1.0)
@@ -69,8 +75,20 @@ def test_order_expires_and_gap_through_stop_cancels():
 
 def test_next_open_and_time_exit():
     frame = bars([(102, 103, 101, 102)] * 6)
-    [t] = simulate(frame, entry="next_open", start=0, max_hold=3, cost_bps=0)
+    [t] = simulate(frame, entry="next_open", start=0, max_hold=3, cost_bps=0, exit="target")
     assert (t["entry"], t["reason"], t["days"]) == (102, "time", 3)
+
+
+def test_trailing_stop_rises_and_never_falls():
+    # Fill at 100 (stop 95), run to 120, then fall: stop trails 4 ATR (=8) under the peak close
+    rows = [(102, 103, 101, 102), (101, 101, 99, 100), (110, 116, 109, 115), (120, 121, 119, 120),
+            (118, 119, 117, 118), (113, 114, 111, 112)]
+    frame = bars(rows)
+    frame["atr14"] = 2.0
+    [t] = simulate(frame, start=0, cost_bps=0, exit="trail", trail_atr=4)
+    assert (t["exit"], t["reason"], t["target"]) == (112, "trail_stop", None)
+    assert t["stop"] == 95  # R is measured against the initial stop
+    assert t["r"] == pytest.approx(12 / 5)
 
 
 def test_min_score_filters_signals():

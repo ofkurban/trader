@@ -548,10 +548,15 @@ function updateLevelCards(levels) {
   els.levelBuy.textContent = `${formatMoney(levels.buy_low)} – ${formatMoney(levels.buy_high)}`;
   els.levelTakeProfit.textContent = formatMoney(levels.take_profit);
   els.levelStop.textContent = formatMoney(levels.stop_loss);
-  els.levelTakeProfitHint.textContent =
+  const basis =
     levels.take_profit_basis === "atr_projection"
       ? "Near 60-day high — projected 3× ATR above price"
       : "Near 60-day resistance";
+  // The backtest found letting winners run beat a fixed target
+  els.levelTakeProfitHint.textContent =
+    levels.trail_distance != null
+      ? `${basis}. Backtest favors a trailing stop instead: ${formatMoney(levels.trail_distance)} (4× ATR) below the highest close.`
+      : basis;
   const rrZone = levels.risk_reward != null ? `${levels.risk_reward}:1` : "—";
   const rrNow = levels.risk_reward_now != null ? `${levels.risk_reward_now}:1` : "—";
   els.levelRr.textContent = `${rrZone} zone · ${rrNow} now`;
@@ -562,7 +567,9 @@ function updateMetricCards(levels) {
   els.metricRsi.textContent = levels.rsi14 != null ? levels.rsi14 : "—";
   els.metricRsiHint.textContent =
     levels.rsi_signal === "oversold"
-      ? "Oversold — possible bounce zone"
+      ? levels.trend_vs_sma200 === "below"
+        ? "Oversold in a downtrend — these kept falling in backtests"
+        : "Oversold — possible bounce zone"
       : levels.rsi_signal === "overbought"
         ? "Overbought — caution on new buys"
         : "Neutral momentum";
@@ -592,7 +599,12 @@ function updateMetricCards(levels) {
     trendLabel(levels.trend_vs_sma20) + " SMA20",
     trendLabel(levels.trend_vs_sma50) + " SMA50",
     trendLabel(levels.trend_vs_sma200) + " SMA200",
-  ].join("<br>");
+    levels.rel_strength_6m != null
+      ? `<span class="${pctClass(levels.rel_strength_6m)}">${levels.rel_strength_6m > 0 ? "+" : ""}${levels.rel_strength_6m} pts</span> vs SPY (6M)`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("<br>");
 }
 
 function updatePerformance(levels) {
@@ -1388,6 +1400,7 @@ const btEls = {
   form: document.getElementById("bt-form"),
   period: document.getElementById("bt-period"),
   entry: document.getElementById("bt-entry"),
+  exit: document.getElementById("bt-exit"),
   minScore: document.getElementById("bt-min-score"),
   maxHold: document.getElementById("bt-max-hold"),
   cost: document.getElementById("bt-cost"),
@@ -1401,6 +1414,7 @@ const EXIT_LABELS = {
   target_gap: "Gapped above target",
   stop: "Stop loss",
   stop_gap: "Gapped below stop",
+  trail_stop: "Trailing stop",
   time: "Max hold reached",
   open: "Still open",
 };
@@ -1470,7 +1484,7 @@ function renderBacktest(data) {
     .reverse()
     .map((t) => `<tr>
       <td>${escapeHtml(t.symbol)}</td><td>${escapeHtml(t.entry_date)}</td><td>${t.score}</td>
-      <td>${formatMoney(t.entry)}</td><td>${formatMoney(t.stop)}</td><td>${formatMoney(t.target)}</td>
+      <td>${formatMoney(t.entry)}</td><td>${formatMoney(t.stop)}</td><td>${t.target == null ? "trail" : formatMoney(t.target)}</td>
       <td>${escapeHtml(t.exit_date)}</td><td>${formatMoney(t.exit)}</td>
       <td>${escapeHtml(EXIT_LABELS[t.reason] || t.reason)}</td><td>${t.days}</td>
       <td class="${pctClass(t.r)}">${fmtR(t.r)}</td></tr>`)
@@ -1532,6 +1546,7 @@ async function runBacktest() {
   const params = new URLSearchParams({
     period: btEls.period.value,
     entry: btEls.entry.value,
+    exit: btEls.exit.value,
     min_score: btEls.minScore.value,
     max_hold: btEls.maxHold.value,
     cost_bps: btEls.cost.value,

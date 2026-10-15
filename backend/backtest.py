@@ -10,7 +10,9 @@ scores them, and trades are simulated from the signal:
   * entry "next_open": buy at the next day's open.
 
 Each trade exits at the stop, the take profit, or after `max_hold` days at the
-close. When stop and target are both inside one day's range the stop is
+close. With exit "trail" there is no take profit: after each close the stop
+rises to the highest close since entry minus `trail_atr` ATRs (never lower),
+so winners run until the trend breaks. When stop and target are both inside one day's range the stop is
 assumed to hit first, and on the fill day only the stop is checked —
 both pessimistic, because daily bars hide the intraday order.
 
@@ -28,20 +30,23 @@ import numpy as np
 import pandas as pd
 
 from backend.levels import (
+    TRAIL_ATR,
     TP_MIN_ATR_ROOM,
     TP_PROJECTION_ATR,
     _open_session_fraction,
     compute_recommendation,
     compute_rsi_series,
+    relative_strength_series,
 )
 
 EntryMode = Literal["buy_zone", "next_open"]
+ExitMode = Literal["target", "trail"]
 
 WARMUP = 200  # bars before the first signal, so SMA200 exists like in the app
 FORWARD_DAYS = (5, 20, 60)
 
 
-def indicator_frame(hist: pd.DataFrame) -> pd.DataFrame:
+def indicator_frame(hist: pd.DataFrame, benchmark: pd.Series | None = None) -> pd.DataFrame:
     """compute_levels() for every bar at once, using only data up to that bar."""
     close, high, low, volume = hist["Close"], hist["High"], hist["Low"], hist["Volume"]
 
@@ -87,6 +92,11 @@ def indicator_frame(hist: pd.DataFrame) -> pd.DataFrame:
             "take_profit": take_profit,
             "stop_loss": stop_loss,
             "risk_reward_now": rr_now,
+            "rel_strength": (
+                relative_strength_series(close, benchmark).round(1)
+                if benchmark is not None
+                else np.nan
+            ),
         },
         index=hist.index,
     )
@@ -96,7 +106,7 @@ def _num(value) -> float | None:
     return None if value is None or pd.isna(value) else float(value)
 
 
-def score_frame(frame: pd.DataFrame) -> pd.DataFrame:
+def score_frame(frame: pd.DataFrame, recommend=compute_recommendation) -> pd.DataFrame:
     """Add action/score columns from the app's own compute_recommendation()."""
     actions, scores = [], []
     for row in frame.itertuples():
@@ -104,7 +114,7 @@ def score_frame(frame: pd.DataFrame) -> pd.DataFrame:
             actions.append(None)
             scores.append(None)
             continue
-        rec = compute_recommendation(
+        rec = recommend(
             last=row.close,
             sma20=row.sma20,
             sma50=_num(row.sma50),
@@ -114,6 +124,7 @@ def score_frame(frame: pd.DataFrame) -> pd.DataFrame:
             support=row.support,
             resistance=row.resistance,
             risk_reward=_num(row.risk_reward_now),
+            rel_strength=_num(row.rel_strength),
         )
         actions.append(rec["action"])
         scores.append(rec["score"])
@@ -132,14 +143,17 @@ def simulate(
     *,
     entry: EntryMode = "buy_zone",
     min_score: int = 3,
-    max_hold: int = 60,
+    max_hold: int = 250,
     entry_window: int = 10,
     cost_bps: float = 5.0,
+    exit: ExitMode = "trail",
+    trail_atr: float = TRAIL_ATR,
     start: int = WARMUP,
 ) -> list[dict]:
     """Walk the scored frame day by day and return the simulated trades."""
     cost = cost_bps / 10_000
     o, h, l, c = (frame[k].to_numpy() for k in ("open", "high", "low", "close"))
+    atr = frame["atr14"].to_numpy() if "atr14" in frame else np.full(len(frame), np.nan)
     dates = [d.strftime("%Y-%m-%d") for d in frame.index]
     n = len(frame)
 
@@ -151,10 +165,14 @@ def simulate(
         nonlocal pos
         fill_net = pos["entry"] * (1 + cost)
         exit_net = price * (1 - cost)
-        risk = pos["entry"] - pos["stop"]
+        risk = pos["entry"] - pos["init_stop"]
+        if reason.startswith("stop") and pos["stop"] > pos["init_stop"]:
+            reason = "trail_stop"
         trades.append(
             {
-                **{k: pos[k] for k in ("signal_date", "entry_date", "score", "stop", "target")},
+                **{k: pos[k] for k in ("signal_date", "entry_date", "score")},
+                "stop": pos["init_stop"],
+                "target": None if exit == "trail" else pos["target"],
                 "entry": round(pos["entry"], 2),
                 "exit_date": dates[i],
                 "exit": round(price, 2),
@@ -168,7 +186,10 @@ def simulate(
 
     def open_trade(i: int, price: float) -> None:
         nonlocal pos, order
-        pos = {**order, "entry": price, "entry_date": dates[i], "entry_i": i}
+        pos = {**order, "entry": price, "entry_date": dates[i], "entry_i": i,
+               "init_stop": order["stop"], "peak": price}
+        if exit == "trail":
+            pos["target"] = math.inf
         order = None
 
     for i in range(start, n):
@@ -201,6 +222,11 @@ def simulate(
                 open_trade(i, min(o[i], order["limit"]))
             if pos is not None and l[i] <= pos["stop"]:
                 close_trade(i, pos["stop"], "stop")
+
+        # Raise the trailing stop from today's close (used from tomorrow)
+        if pos is not None and exit == "trail" and not np.isnan(atr[i]):
+            pos["peak"] = max(pos["peak"], c[i])
+            pos["stop"] = max(pos["stop"], pos["peak"] - trail_atr * atr[i])
 
         # 3. Today's close produces a new signal for tomorrow
         if pos is None and i < n - 1:
@@ -296,11 +322,11 @@ def _buy_hold_pct(frame: pd.DataFrame, start: int) -> float | None:
     return round((last / first - 1) * 100, 2) if first > 0 else None
 
 
-def backtest_symbol(hist: pd.DataFrame, **params) -> dict:
+def backtest_symbol(hist: pd.DataFrame, benchmark: pd.Series | None = None, **params) -> dict:
     hist = _drop_open_session(hist)
     if len(hist) < WARMUP + 20:
         raise ValueError(f"Need at least {WARMUP + 20} daily bars, got {len(hist)}")
-    frame = score_frame(indicator_frame(hist))
+    frame = score_frame(indicator_frame(hist, benchmark))
     trades = simulate(frame, **params)
     closed = [t for t in trades if t["reason"] != "open"]
     strategy = math.prod(1 + t["return_pct"] / 100 for t in closed) - 1 if closed else 0.0
@@ -318,9 +344,10 @@ def backtest_symbol(hist: pd.DataFrame, **params) -> dict:
 def run_backtest(histories: dict[str, pd.DataFrame], benchmark: pd.DataFrame | None = None, **params) -> dict:
     """Backtest each symbol and pool the trades into one overall summary."""
     per_symbol, errors, studies, all_trades = [], {}, [], []
+    bench_close = _drop_open_session(benchmark)["Close"] if benchmark is not None else None
     for symbol, hist in histories.items():
         try:
-            result = backtest_symbol(hist, **params)
+            result = backtest_symbol(hist, bench_close, **params)
         except ValueError as exc:
             errors[symbol] = str(exc)
             continue
@@ -332,7 +359,7 @@ def run_backtest(histories: dict[str, pd.DataFrame], benchmark: pd.DataFrame | N
     bench = None
     if benchmark is not None and per_symbol:
         # Buy & hold the benchmark over the same window as the earliest symbol
-        close = _drop_open_session(benchmark)["Close"]
+        close = bench_close
         close = close[close.index.strftime("%Y-%m-%d") >= min(s["from"] for s in per_symbol)]
         if len(close) > 1 and close.iloc[0] > 0:
             bench = round((close.iloc[-1] / close.iloc[0] - 1) * 100, 2)

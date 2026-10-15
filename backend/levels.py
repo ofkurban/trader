@@ -13,6 +13,15 @@ MIN_SESSION_FRACTION = 0.1
 TP_MIN_ATR_ROOM = 1.0
 TP_PROJECTION_ATR = 3.0
 
+# Relative strength: 6-month return vs the benchmark (SPY), in percentage points.
+# Backtests on ~180 US stocks (2021-2026) found this the only score input that
+# helped in both halves of the period; see backend/backtest.py.
+RS_DAYS = 126
+RS_THRESHOLD = 10.0
+RS_POINTS = 2
+# Trailing stop the backtest favours over a fixed take profit
+TRAIL_ATR = 4.0
+
 
 def _open_session_fraction(bar_ts, now: pd.Timestamp | None = None) -> float | None:
     """Share of the regular session elapsed if bar_ts is today's still-open bar, else None."""
@@ -57,6 +66,22 @@ def volume_signal(ratio: float) -> str:
     return "normal"
 
 
+def relative_strength_series(close: pd.Series, benchmark: pd.Series, days: int = RS_DAYS) -> pd.Series:
+    """Stock's N-day return minus the benchmark's, in percentage points, per bar."""
+
+    def day_index(idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
+        if idx.tz is not None:
+            idx = idx.tz_convert(MARKET_TZ).tz_localize(None)
+        return idx.normalize()
+
+    bench = pd.Series(benchmark.to_numpy(dtype=float), index=day_index(benchmark.index))
+    bench = bench[~bench.index.duplicated(keep="last")].sort_index()
+    aligned = pd.Series(bench.reindex(day_index(close.index), method="ffill").to_numpy(), index=close.index)
+    stock_ret = close / close.shift(days) - 1
+    bench_ret = aligned / aligned.shift(days) - 1
+    return (stock_ret - bench_ret) * 100
+
+
 def compute_recommendation(
     *,
     last: float,
@@ -68,6 +93,7 @@ def compute_recommendation(
     support: float,
     resistance: float,
     risk_reward: float | None,
+    rel_strength: float | None = None,
 ) -> dict:
     """Score-based BUY / HOLD / SELL from technicals (educational, not advice)."""
     score = 0
@@ -97,9 +123,13 @@ def compute_recommendation(
             score -= 2
             reasons.append("Price below SMA200 (long-term downtrend)")
 
-    # RSI
+    # RSI. In a long-term downtrend, oversold readings kept falling in backtests,
+    # so they earn no "bounce" points there.
+    downtrend = sma200 is not None and last < sma200
     if rsi14 is not None:
-        if rsi14 < 30:
+        if rsi14 < 45 and downtrend:
+            reasons.append(f"RSI {rsi14} low, but below SMA200 — no bounce credit in a downtrend")
+        elif rsi14 < 30:
             score += 2
             reasons.append(f"RSI {rsi14} oversold — bounce setup possible")
         elif rsi14 < 45:
@@ -113,6 +143,15 @@ def compute_recommendation(
             reasons.append(f"RSI {rsi14} elevated")
         else:
             reasons.append(f"RSI {rsi14} neutral")
+
+    # Relative strength vs the market (momentum)
+    if rel_strength is not None:
+        if rel_strength > RS_THRESHOLD:
+            score += RS_POINTS
+            reasons.append(f"Beat SPY by {rel_strength:.0f} pts over 6 months (strong momentum)")
+        elif rel_strength < -RS_THRESHOLD:
+            score -= RS_POINTS
+            reasons.append(f"Lagged SPY by {-rel_strength:.0f} pts over 6 months (weak momentum)")
 
     # Position in range (near support vs resistance)
     span = resistance - support
@@ -165,8 +204,11 @@ def compute_recommendation(
     }
 
 
-def compute_levels(hist: pd.DataFrame) -> dict:
-    """Compute support/resistance and suggested buy, sell, stop levels."""
+def compute_levels(hist: pd.DataFrame, benchmark: pd.Series | None = None) -> dict:
+    """Compute support/resistance and suggested buy, sell, stop levels.
+
+    benchmark: the market's daily closes (SPY) for the relative-strength score.
+    """
     if hist.empty or len(hist) < 20:
         raise ValueError("Not enough history to compute levels")
 
@@ -240,6 +282,11 @@ def compute_levels(hist: pd.DataFrame) -> dict:
     reward_now = take_profit - last
     risk_reward_now = round(reward_now / risk_now, 2) if risk_now > 0 else None
 
+    rel_strength = None
+    if benchmark is not None and len(close) > RS_DAYS:
+        rs = relative_strength_series(close, benchmark).iloc[-1]
+        rel_strength = None if pd.isna(rs) else round(float(rs), 1)
+
     recommendation = compute_recommendation(
         last=last,
         sma20=sma20,
@@ -250,6 +297,7 @@ def compute_levels(hist: pd.DataFrame) -> dict:
         support=support,
         resistance=resistance,
         risk_reward=risk_reward_now,
+        rel_strength=rel_strength,
     )
 
     return {
@@ -272,6 +320,8 @@ def compute_levels(hist: pd.DataFrame) -> dict:
         "take_profit_basis": take_profit_basis,
         "stop_loss": stop_loss,
         "atr14": round(atr14, 2),
+        "trail_distance": round(TRAIL_ATR * atr14, 2),
+        "rel_strength_6m": rel_strength,
         "risk_reward": risk_reward,
         "risk_reward_now": risk_reward_now,
         "volume_partial_session": session_fraction is not None,

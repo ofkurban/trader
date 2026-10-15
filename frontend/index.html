@@ -350,8 +350,14 @@
             <option value="next_open">Next day's open</option>
           </select>
         </label>
-        <label>Min BUY score <input id="bt-min-score" type="number" min="1" max="10" value="3"></label>
-        <label>Max hold (days) <input id="bt-max-hold" type="number" min="1" max="250" value="60"></label>
+        <label>Exit
+          <select id="bt-exit">
+            <option value="trail" selected>Trailing stop (4× ATR)</option>
+            <option value="target">Fixed take profit</option>
+          </select>
+        </label>
+        <label>Min BUY score <input id="bt-min-score" type="number" min="1" max="12" value="3"></label>
+        <label>Max hold (days) <input id="bt-max-hold" type="number" min="1" max="500" value="250"></label>
         <label>Cost per side (bps) <input id="bt-cost" type="number" min="0" max="100" step="1" value="5"></label>
         <button id="bt-run-btn" type="submit">Run backtest</button>
       </form>
