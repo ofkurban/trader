@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from backend import alpaca, broker
+from backend.analysts import MIN_ACCURACY, MIN_CALLS, analyst_report
 from backend.auth import basic_auth_middleware
 from backend.backtest import run_backtest
 from backend.cache import ttl_cache
@@ -28,6 +29,7 @@ from backend.levels import compute_levels, compute_price_stats, history_to_recor
 from backend.news import fetch_chip_news, fetch_news
 from backend.overnight import fetch_overnight_signals
 from backend.symbols import lookup_name, normalize_symbol, parse_symbols, search_symbols
+from backend.setups import compute_setup, monitor as monitor_setups
 from backend.trader_agent import agent_status, analyze_symbol, chat_about_symbol
 
 log = logging.getLogger("trader")
@@ -458,6 +460,11 @@ def get_watchlist(symbols: str | None = None):
     return {"watchlist": fetch_watchlist_items(parse_symbols(symbols))}
 
 
+@app.get("/api/setups")
+def get_setups(symbols: str = Query(min_length=1, max_length=500)):
+    return monitor_setups(tuple(parse_symbols(symbols)))
+
+
 @app.get("/api/stock/{symbol}")
 def get_stock(symbol: str, period: Period = "1y"):
     symbol = normalize_symbol(symbol)
@@ -469,6 +476,7 @@ def get_stock(symbol: str, period: Period = "1y"):
         "period": period,
         "history": history_to_records(hist),
         "levels": levels,
+        "setup": compute_setup(hist),
         "system": build_system(symbol, hist, levels),
         "news": safe_fetch_news(symbol),
         "data_source": source,
@@ -494,6 +502,32 @@ def get_watchlist_news(limit: int = 5, symbols: str | None = None):
     with ThreadPoolExecutor(max_workers=min(len(symbol_list), 10)) as pool:
         items = [i for i in pool.map(top_headline, symbol_list) if i]
     return {"news": items}
+
+
+@ttl_cache(seconds=6 * 3600, maxsize=100)
+def cached_analysts(symbol: str, min_accuracy: float, min_calls: int) -> dict:
+    ticker = yf.Ticker(symbol)
+    ratings = ticker.upgrades_downgrades
+    if ratings is None or ratings.empty:
+        raise HTTPException(status_code=404, detail=f"No analyst ratings for {symbol}")
+    # Yahoo, not Alpaca: ratings go back to ~2012 and we need its split dates
+    hist = ticker.history(period="max")
+    spy = yf.Ticker("SPY").history(period="max")["Close"]
+    if hist.empty or spy.empty:
+        raise HTTPException(status_code=404, detail=f"No price history for {symbol}")
+    return analyst_report(
+        ratings, hist, spy, ticker.splits, min_accuracy=min_accuracy, min_calls=min_calls
+    )
+
+
+@app.get("/api/stock/{symbol}/analysts")
+def get_stock_analysts(
+    symbol: str,
+    min_accuracy: float = Query(MIN_ACCURACY, ge=0.5, le=1.0),
+    min_calls: int = Query(MIN_CALLS, ge=1, le=50),
+):
+    symbol = normalize_symbol(symbol)
+    return {"symbol": symbol, **cached_analysts(symbol, min_accuracy, min_calls)}
 
 
 @app.get("/api/stock/{symbol}/news")

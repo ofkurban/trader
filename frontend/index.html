@@ -26,9 +26,7 @@
 
     <nav class="tabs" role="tablist" aria-label="Views">
       <button type="button" class="tab active" role="tab" id="tab-dashboard" data-view="dashboard" aria-selected="true" aria-controls="view-dashboard">Dashboard</button>
-      <button type="button" class="tab" role="tab" id="tab-signals" data-view="signals" aria-selected="false" aria-controls="view-signals">Early signals · Top 10</button>
-      <button type="button" class="tab" role="tab" id="tab-backtest" data-view="backtest" aria-selected="false" aria-controls="view-backtest">Backtest</button>
-      <button type="button" class="tab" role="tab" id="tab-journal" data-view="journal" aria-selected="false" aria-controls="view-journal">Journal</button>
+      <button type="button" class="tab" role="tab" id="tab-signals" data-view="signals" aria-selected="false" aria-controls="view-signals">Setup radar</button>
     </nav>
 
     <div id="view-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
@@ -232,6 +230,21 @@
             </div>
           </section>
 
+          <section class="analysts-section">
+            <div class="analysts-header">
+              <h3>Top analysts</h3>
+              <label class="muted">Track record ≥
+                <select id="analysts-min-accuracy">
+                  <option value="0.7">70%</option>
+                  <option value="0.8" selected>80%</option>
+                  <option value="0.9">90%</option>
+                </select>
+              </label>
+            </div>
+            <p id="analysts-summary" class="muted"></p>
+            <div id="analysts-list"></div>
+          </section>
+
           <section class="news-section">
             <h3>Latest news</h3>
             <div id="news-list" class="news-list"></div>
@@ -312,7 +325,6 @@
               <button id="reset-levels-btn" type="button" class="secondary">Reset to suggested</button>
               <button id="size-btn" type="button" class="secondary">Size by risk</button>
               <button id="save-plan-btn" type="button" class="secondary">Save plan (local)</button>
-              <button id="log-trade-btn" type="button">Log trade in journal</button>
               <button id="paper-order-btn" type="button" class="paper-btn hidden">Place paper order</button>
             </div>
             <p id="broker-info" class="muted broker-info hidden"></p>
@@ -331,10 +343,9 @@
     <section id="view-signals" class="signals-view hidden" role="tabpanel" aria-labelledby="tab-signals">
       <div class="signals-head">
         <div>
-          <h2>Early signals — Top 10</h2>
+          <h2>Setup radar</h2>
           <p class="muted">
-            Stocks where several early "move up" signals line up, ranked by how many agree.
-            Stocks already up more than 30% in the last month are excluded.
+            Find a base, watch the trigger, then wait for confirmation. Daily-close setups with supporting signals; these rules have not been backtested.
           </p>
         </div>
         <div class="signals-actions">
@@ -343,6 +354,17 @@
         </div>
       </div>
       <div id="signals-legend" class="signals-legend"></div>
+      <div id="radar-filters" class="radar-filters" role="group" aria-label="Filter setups"></div>
+      <section class="radar-alerts" aria-label="Setup alerts">
+        <div class="signals-actions">
+          <button type="button" id="alerts-notify" class="secondary">Enable desktop notifications</button>
+          <button type="button" id="alerts-check" class="secondary">Check watched setups</button>
+        </div>
+        <p class="muted">Watch a card to save its trigger and invalidation. Checks run every 5 minutes while this app is open, using completed daily bars. Closing the app pauses alerts.</p>
+        <p id="alerts-status" class="muted" role="status"></p>
+        <div id="alerts-watched"></div>
+        <ol id="alerts-feed" aria-label="Recent setup changes" aria-live="polite"></ol>
+      </section>
       <p id="signals-status" class="muted signals-status"></p>
       <div id="signals-list" class="signals-list"></div>
       <p id="signals-footer" class="muted signals-footer"></p>
@@ -354,83 +376,12 @@
       </p>
     </section>
 
-    <section id="view-backtest" class="signals-view backtest-view hidden" role="tabpanel" aria-labelledby="tab-backtest">
-      <div class="signals-head">
-        <div>
-          <h2>Backtest — does the BUY signal work?</h2>
-          <p class="muted">
-            Replays the app's BUY score and suggested buy zone, stop and take profit on past daily bars
-            for your watchlist, one day at a time with no look-ahead.
-          </p>
-        </div>
-      </div>
-      <form id="bt-form" class="bt-form">
-        <label>Period
-          <select id="bt-period"><option value="2y">2 years</option><option value="5y" selected>5 years</option><option value="max">Max</option></select>
-        </label>
-        <label>Entry
-          <select id="bt-entry">
-            <option value="buy_zone" selected>Limit at buy zone</option>
-            <option value="next_open">Next day's open</option>
-          </select>
-        </label>
-        <label>Exit
-          <select id="bt-exit">
-            <option value="trail" selected>Trailing stop (4× ATR)</option>
-            <option value="target">Fixed take profit</option>
-          </select>
-        </label>
-        <label>Min BUY score <input id="bt-min-score" type="number" min="1" max="12" value="3"></label>
-        <label>Max hold (days) <input id="bt-max-hold" type="number" min="1" max="500" value="250"></label>
-        <label>Cost per side (bps) <input id="bt-cost" type="number" min="0" max="100" step="1" value="5"></label>
-        <button id="bt-run-btn" type="submit">Run backtest</button>
-      </form>
-      <p id="bt-status" class="muted signals-status"></p>
-      <div id="bt-results" class="bt-results"></div>
-      <p class="disclaimer">
-        Uses today's watchlist, so stocks that were delisted or collapsed are missing (survivorship bias) —
-        real results would likely be worse. When the stop and target fall in the same daily bar the stop is
-        assumed to hit first. R = profit ÷ initial risk (entry − stop). Past results don't predict future
-        returns. Not financial advice.
-      </p>
-    </section>
 
-    <section id="view-journal" class="signals-view journal-view hidden" role="tabpanel" aria-labelledby="tab-journal">
-      <div class="signals-head">
-        <div>
-          <h2>Trade journal</h2>
-          <p class="muted">
-            Log trades from the order plan on the dashboard. Open trades get the backtest's 4× ATR trailing
-            stop; closed trades are scored the same way as the backtest so you can compare.
-          </p>
-        </div>
-        <div class="signals-actions">
-          <button id="journal-refresh-btn" type="button" class="secondary">Refresh prices</button>
-          <button id="journal-export-btn" type="button" class="secondary">Export</button>
-          <label class="import-btn secondary-like">Import<input id="journal-import" type="file" accept="application/json,.json" hidden></label>
-        </div>
-      </div>
-      <p id="journal-status" class="muted signals-status"></p>
-      <div id="journal-summary"></div>
 
-      <h3 class="bt-h3">Open trades</h3>
-      <div class="bt-table-wrap"><table class="bt-table">
-        <thead><tr><th>Symbol</th><th>Entry date</th><th>Entry</th><th>Shares</th><th>Initial stop</th><th>Price</th><th>Trail stop</th><th>Open R</th><th>P/L</th><th>Status</th><th></th></tr></thead>
-        <tbody id="journal-open"></tbody>
-      </table></div>
 
-      <h3 class="bt-h3">Closed trades</h3>
-      <div class="bt-table-wrap"><table class="bt-table">
-        <thead><tr><th>Symbol</th><th>Entry</th><th>Exit</th><th>Entry $</th><th>Exit $</th><th>Shares</th><th>R</th><th>P/L</th><th>App said</th><th>Notes</th><th></th></tr></thead>
-        <tbody id="journal-closed"></tbody>
-      </table></div>
-      <p class="disclaimer">
-        Saved in this browser only — use Export to back up or move it to another device.
-        Trailing stops are guides; place real stop orders with your broker. Not financial advice.
-      </p>
-    </section>
   </div>
 
+  <script src="/static/setup-alerts.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

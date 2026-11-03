@@ -31,8 +31,18 @@ def test_any_ticker_can_be_opened(client):
     res = client.get("/api/stock/aapl")
     assert res.status_code == 200
     assert res.json()["symbol"] == "AAPL"
+    assert res.json()["setup"]["trigger"] is not None
     for symbol in ("BRK-B", "005930.KS", "^SOX", "NQ=F"):
         assert client.get(f"/api/stock/{symbol}").status_code == 200, symbol
+
+
+def test_setup_monitor_normalizes_and_limits_symbols(client, monkeypatch):
+    monkeypatch.setattr(main, "monitor_setups", lambda symbols: {"symbols": list(symbols)})
+    response = client.get("/api/setups?symbols=aapl,MSFT,aapl")
+    assert response.status_code == 200
+    assert response.json()["symbols"] == ["AAPL", "MSFT"]
+    assert client.get("/api/setups?symbols=AAPL;rm").status_code == 400
+    assert client.get("/api/setups?symbols=" + ",".join(f"T{i}" for i in range(31))).status_code == 400
 
 
 @pytest.mark.parametrize("bad", ["AAPL;rm", "a b", "TOOLONGSYMBOLNAME1", "$$$"])

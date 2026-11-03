@@ -58,7 +58,6 @@ const els = {
   inputNotes: document.getElementById("input-notes"),
   sizingInfo: document.getElementById("sizing-info"),
   sizeBtn: document.getElementById("size-btn"),
-  logTradeBtn: document.getElementById("log-trade-btn"),
   paperOrderBtn: document.getElementById("paper-order-btn"),
   brokerInfo: document.getElementById("broker-info"),
   planMessage: document.getElementById("plan-message"),
@@ -801,6 +800,15 @@ function renderStock(data) {
   if (data.levels.sma20) addPriceLine(data.levels.sma20, "#ffcc66", "SMA20");
   if (data.levels.sma200) addPriceLine(data.levels.sma200, "#c792ea", "SMA200");
 
+  if (data.setup?.trigger) {
+    addPriceLine(data.setup.trigger, "#ffcc66", "Setup trigger");
+    addPriceLine(data.setup.invalidation, "#f07178", "Setup invalidation");
+  }
+  const watchedSetup = setupAlerts.watches[data.symbol];
+  if (watchedSetup) {
+    addPriceLine(watchedSetup.trigger, "#59c2ff", "Watched trigger");
+    addPriceLine(watchedSetup.invalidation, "#c792ea", "Watched invalidation");
+  }
   renderNewsList(data.news);
   // Keep the conversation when Refresh reloads the same symbol
   if (symbolChanged) resetChat();
@@ -984,12 +992,76 @@ async function loadWatchlist() {
   return data.watchlist;
 }
 
+const analystEls = {
+  minAccuracy: document.getElementById("analysts-min-accuracy"),
+  summary: document.getElementById("analysts-summary"),
+  list: document.getElementById("analysts-list"),
+};
+let analystsRequestSeq = 0;
+
+function analystRow(f) {
+  const sideClass = f.side > 0 ? "up" : f.side < 0 ? "down" : "flat";
+  const target = f.target == null ? "—" : formatMoney(f.target);
+  return `<tr>
+    <td>${escapeHtml(f.firm)}</td>
+    <td class="${sideClass}">${escapeHtml(f.rating)}</td>
+    <td>${target}</td>
+    <td class="${pctClass(f.upside_pct)}">${formatPct(f.upside_pct)}</td>
+    <td>${f.accuracy_pct}% <span class="muted">of ${f.calls}</span></td>
+    <td>${f.target_hit_pct == null ? "—" : `${f.target_hit_pct}%`}</td>
+    <td class="${pctClass(f.avg_excess_pct)}">${formatPct(f.avg_excess_pct)}</td>
+    <td class="muted">${escapeHtml(f.rating_date)}</td>
+  </tr>`;
+}
+
+function renderAnalysts(data) {
+  const c = data.consensus;
+  const base = data.buy_base_rate_pct;
+  let text = data.top.length
+    ? `${plural(data.top.length, "firm")} with ≥${data.min_accuracy_pct}% correct calls (of ${data.firms_graded} with ${data.min_calls}+ graded): ` +
+      `${c.buy} buy · ${c.hold} hold · ${c.sell} sell` +
+      (c.avg_target ? ` · avg target ${formatMoney(c.avg_target)} (${formatPct(c.upside_pct)})` : "") + "."
+    : `No active firm has ≥${data.min_accuracy_pct}% correct calls on ${data.symbol} (${data.firms_graded} firms with ${data.min_calls}+ graded calls).`;
+  text += ` A call is correct when the stock beat SPY over the next 12 months (Buy) or lagged it (Sell).`;
+  if (base != null) {
+    text += ` Baseline: a blind Buy beat SPY ${base}% of the time` +
+      (base >= data.min_accuracy_pct ? " — so these firms may have ridden the stock rather than shown skill." : ".");
+  }
+  analystEls.summary.textContent = text;
+  analystEls.list.innerHTML = data.top.length
+    ? `<div class="bt-table-wrap"><table class="bt-table analysts-table">
+        <thead><tr><th>Firm</th><th>Rating</th><th>Target</th><th>Upside</th>
+          <th title="Graded Buy/Sell calls that beat (or lagged, for Sell) SPY over 12 months">Correct</th>
+          <th title="Calls whose price target was reached within 12 months">Target hit</th>
+          <th title="Average 12-month return vs SPY in the direction of the call">Avg edge</th>
+          <th>Last rating</th></tr></thead>
+        <tbody>${data.top.map(analystRow).join("")}</tbody></table></div>`
+    : "";
+}
+
+async function loadAnalysts(symbol) {
+  const seq = ++analystsRequestSeq;
+  analystEls.summary.textContent = "Grading analyst track records…";
+  analystEls.list.innerHTML = "";
+  try {
+    const data = await fetchJson(`${API}/stock/${symbol}/analysts?min_accuracy=${analystEls.minAccuracy.value}`);
+    if (seq === analystsRequestSeq) renderAnalysts(data);
+  } catch (err) {
+    if (seq === analystsRequestSeq) analystEls.summary.textContent = `Analyst ratings unavailable: ${err.message}`;
+  }
+}
+
+analystEls.minAccuracy.addEventListener("change", () => {
+  if (currentSymbol) loadAnalysts(currentSymbol);
+});
+
 async function loadStock(symbol) {
   const seq = ++stockRequestSeq;
   const data = await fetchJson(`${API}/stock/${symbol}`);
   // A later click already started another load; don't let this one overwrite it
   if (seq !== stockRequestSeq) return;
   renderStock(data);
+  loadAnalysts(data.symbol);
   updateWatchToggle();
   document.querySelectorAll(".watch-item").forEach((el) => el.classList.remove("active"));
   const items = els.watchlist.querySelectorAll(".watch-item");
@@ -1275,8 +1347,6 @@ els.symbolSearch.addEventListener("submit", (e) => {
 const views = {
   dashboard: "view-dashboard",
   signals: "view-signals",
-  backtest: "view-backtest",
-  journal: "view-journal",
 };
 
 function showView(name) {
@@ -1288,8 +1358,6 @@ function showView(name) {
     tab.setAttribute("aria-selected", String(key === name));
   }
   if (name === "signals" && !signalsLoaded) loadSignals();
-  if (name === "backtest" && !backtestLoaded) runBacktest();
-  if (name === "journal") refreshJournal();
 }
 
 document.querySelectorAll(".tab").forEach((tab) => {
@@ -1327,17 +1395,135 @@ const SIGNAL_HELP = {
 
 let signalsLoaded = false;
 let signalsSeq = 0;
+let radarData = null;
+let radarFilter = "all";
+
+const SETUP_LABELS = {forming: "Forming", near: "Near breakout", confirmed: "Confirmed",
+  pullback: "Pullback", extended: "Extended", failed: "Failed", watch: "Watch", unavailable: "Unavailable"};
+const SETUP_ALERT_KEY = "trader-setup-alerts-v1";
+function readSetupAlerts() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETUP_ALERT_KEY));
+    if (!saved || typeof saved.watches !== "object" || !saved.watches) throw new Error();
+    const watches = Object.fromEntries(Object.entries(saved.watches).filter(([symbol, w]) =>
+      /^[A-Z0-9.^=-]{1,16}$/.test(symbol) && w && Number.isFinite(w.trigger) && Number.isFinite(w.invalidation)
+      && w.trigger > w.invalidation && w.invalidation > 0));
+    return {watches, events: Array.isArray(saved.events) ? saved.events.slice(0, 50) : []};
+  } catch { return {watches: {}, events: []}; }
+}
+let setupAlerts = readSetupAlerts();
+let alertsBusy = false;
+function saveSetupAlerts() {
+  try { localStorage.setItem(SETUP_ALERT_KEY, JSON.stringify(setupAlerts)); }
+  catch { document.getElementById("alerts-status").textContent = "Browser storage unavailable. Watches will only last this session."; }
+}
+function renderSetupCard(row) {
+  const s = row.setup;
+  if (!s) return "";
+  const watching = !!setupAlerts.watches[row.symbol];
+  return `<div class="setup-state ${escapeHtml(s.state)}">${escapeHtml(SETUP_LABELS[s.state] || s.state)}${s.stale ? " · stale data" : ""}</div>
+    <div class="setup-levels"><div><span>Trigger above</span><strong>${formatMoney(s.trigger)}</strong></div>
+    <div><span>Invalidation below</span><strong>${formatMoney(s.invalidation)}</strong></div>
+    <div><span>Distance to trigger</span><strong>${s.distance_pct == null ? "—" : `${s.distance_pct.toFixed(1)}%`}</strong></div></div>
+    <p class="muted setup-caption">${s.as_of ? `Daily close ${escapeHtml(s.as_of)}.` : "Insufficient daily history."}
+    ${s.missing?.length ? `Missing: ${escapeHtml(s.missing.join("; "))}.` : "All setup checks met."}</p>
+    <button type="button" class="secondary watch-setup" data-symbol="${escapeHtml(row.symbol)}" ${!watching && (s.stale || !s.trigger || s.trigger <= s.invalidation) ? "disabled" : ""}>${watching ? "Stop watching" : "Watch setup"}</button>`;
+}
+function toggleSetupWatch(row) {
+  if (setupAlerts.watches[row.symbol]) delete setupAlerts.watches[row.symbol];
+  else {
+    if (Object.keys(setupAlerts.watches).length >= 30) {
+      document.getElementById("alerts-status").textContent = "You can watch up to 30 setups. Remove one to add another.";
+      return;
+    }
+    setupAlerts.watches[row.symbol] = {...row.setup, state: row.setup.state, lastDate: row.setup.as_of,
+      confirmed: !!row.setup.breakout_date};
+  }
+  saveSetupAlerts();
+  renderSetupAlerts();
+}
+function renderSetupAlerts() {
+  document.getElementById("alerts-watched").innerHTML = Object.entries(setupAlerts.watches).map(([symbol, s]) =>
+    `<div class="watched-setup"><strong>${escapeHtml(symbol)}</strong> ${escapeHtml(SETUP_LABELS[s.state] || s.state)} · trigger ${formatMoney(s.trigger)} · invalidation ${formatMoney(s.invalidation)} <button class="link-btn" type="button" data-remove-watch="${escapeHtml(symbol)}">Remove</button></div>`).join("") || '<p class="muted">No watched setups yet.</p>';
+  document.querySelectorAll("[data-remove-watch]").forEach(btn => btn.addEventListener("click", () => {
+    delete setupAlerts.watches[btn.dataset.removeWatch];
+    saveSetupAlerts(); renderSetupAlerts();
+    if (radarData) renderSignals(radarData);
+  }));
+  document.getElementById("alerts-feed").innerHTML = setupAlerts.events.map(e =>
+    `<li><strong>${escapeHtml(e.symbol)} · ${escapeHtml(SETUP_LABELS[e.state] || e.state)}</strong> — ${escapeHtml(e.date)} close ${formatMoney(e.price)} <span class="muted">(detected ${escapeHtml(new Date(e.detected).toLocaleString())})</span></li>`).join("");
+}
+async function checkSetupAlerts() {
+  const symbols = Object.keys(setupAlerts.watches);
+  if (alertsBusy || !symbols.length) return;
+  alertsBusy = true;
+  const status = document.getElementById("alerts-status");
+  const button = document.getElementById("alerts-check");
+  button.disabled = true;
+  status.textContent = "Checking completed daily bars…";
+  try {
+    const data = await fetchJson(`${API}/setups?symbols=${encodeURIComponent(symbols.join(","))}`);
+    const unavailable = [];
+    for (const symbol of symbols) {
+      const saved = setupAlerts.watches[symbol], fresh = data.setups[symbol];
+      if (!saved) continue;
+      if (!fresh || fresh.error || fresh.stale || !fresh.as_of) { unavailable.push(symbol); continue; }
+      const observations = fresh.observations || [fresh];
+      for (const observation of observations) {
+        const change = SetupAlertRules.advance(saved, observation);
+        if (!change) continue;
+        const event = {symbol, ...change, detected: new Date().toISOString()};
+        setupAlerts.events.unshift(event);
+        if ("Notification" in window && Notification.permission === "granted") {
+          try { new Notification(`${symbol}: ${SETUP_LABELS[change.state]}`, {body: `Daily close ${formatMoney(change.price)} ? trigger ${formatMoney(saved.trigger)}`, tag: `setup-${symbol}-${change.date}-${change.state}`}); } catch { /* In-app feed remains available. */ }
+        }
+      }
+    }
+    setupAlerts.events = setupAlerts.events.slice(0, 50);
+    status.textContent = `Checked ${new Date().toLocaleTimeString()}. ${unavailable.length ? `No fresh data for ${unavailable.join(", ")}.` : "Waiting for the next completed daily bar."}`;
+    saveSetupAlerts(); renderSetupAlerts();
+    if (radarData) renderSignals(radarData);
+  } catch (error) { status.textContent = `Alert check failed: ${error.message}. Will retry on the next check.`; }
+  finally { alertsBusy = false; button.disabled = false; }
+}
+document.getElementById("alerts-check").addEventListener("click", checkSetupAlerts);
+document.getElementById("alerts-notify").addEventListener("click", async () => {
+  const status = document.getElementById("alerts-status");
+  if (!("Notification" in window) || !window.isSecureContext) {
+    status.textContent = "Desktop notifications need a supported browser and HTTPS or localhost. In-app alerts remain available.";
+    return;
+  }
+  try {
+    const permission = await Notification.requestPermission();
+    status.textContent = permission === "granted" ? "Desktop notifications enabled while the app is open." : "Desktop notifications not enabled. Changes will appear in the alert feed.";
+  } catch { status.textContent = "Desktop notifications unavailable. Changes will appear in the alert feed."; }
+});
+renderSetupAlerts();
+setInterval(checkSetupAlerts, 5 * 60 * 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkSetupAlerts(); });
 
 function renderSignals(data) {
+  radarData = data;
+  const rows = data.radar || data.top;
+  const filters = document.getElementById("radar-filters");
+  filters.innerHTML = Object.entries({all: "All", ...SETUP_LABELS}).map(([key, label]) => {
+    const count = rows.filter(r => key === "all" || r.setup?.state === key).length;
+    return `<button type="button" class="secondary ${radarFilter === key ? "selected" : ""}" aria-pressed="${radarFilter === key}" data-filter="${key}">${label} <span>${count}</span></button>`;
+  }).join("");
+  filters.querySelectorAll("button").forEach(button => button.addEventListener("click", () => {
+    radarFilter = button.dataset.filter;
+    renderSignals(radarData);
+  }));
+  const visible = rows.filter(r => radarFilter === "all" || r.setup?.state === radarFilter);
   const labels = Object.fromEntries(data.signals.map((s) => [s.key, s.label]));
   signalsEls.legend.innerHTML = data.signals
     .map((s) => `<span class="signal-chip hit" title="${escapeHtml(SIGNAL_HELP[s.key] || "")}">${escapeHtml(s.label)}</span>`)
     .join("");
 
-  if (!data.top.length) {
-    signalsEls.list.innerHTML = `<p class="muted">No candidates passed the screen right now.</p>`;
+  if (!visible.length) {
+    signalsEls.list.innerHTML = `<p class="muted">No setups in this category. Try another filter or rescan.</p>`;
   } else {
-    signalsEls.list.innerHTML = data.top
+    signalsEls.list.innerHTML = visible
       .map((r, i) => {
         const chips = data.signals
           .map(({ key }) => {
@@ -1361,16 +1547,21 @@ function renderSignals(data) {
                 <span>${formatMoney(r.price)}</span>
                 <span class="${pctClass(r.ret_1m)}">${formatPct(r.ret_1m == null ? null : r.ret_1m * 100)} 1M</span>
               </div>
-              ${r.ladder ? `<span class="ladder-chip ${r.ladder.side}" title="Signal ladder rung for today's price">${escapeHtml(r.ladder.label)}</span>` : ""}
-              <span class="signal-count" title="Signals lined up (the catalyst counts half when ranking)">${r.signal_count}/${data.signals.length}</span>
+
+              <span class="signal-count" title="Supporting signals, not a probability">${r.signal_count} signals</span>
             </div>
-            <div class="signal-chips">${chips}</div>
+            ${renderSetupCard(r)}<details><summary>Supporting signals</summary><div class="signal-chips">${chips}</div></details>
             <ul class="signal-details">${details}</ul>
-            <p class="signal-line"><span class="signal-tag catalyst">Catalyst</span>${escapeHtml(r.catalyst || "None found in the next 3 months")}</p>
+            <p class="signal-line"><span class="signal-tag catalyst">Catalyst</span>${escapeHtml(r.catalyst || "No verified upcoming earnings date; other catalysts are not covered")}</p>
             <p class="signal-line"><span class="signal-tag risk">Biggest risk</span>${escapeHtml(r.risk)}</p>
           </article>`;
       })
       .join("");
+    signalsEls.list.querySelectorAll(".watch-setup").forEach(btn => btn.addEventListener("click", () => {
+      const row = rows.find(r => r.symbol === btn.dataset.symbol);
+      toggleSetupWatch(row);
+      renderSignals(radarData);
+    }));
     signalsEls.list.querySelectorAll(".signal-ticker").forEach((btn) => {
       btn.addEventListener("click", () => {
         history.replaceState(null, "", location.pathname);
@@ -1384,7 +1575,7 @@ function renderSignals(data) {
   const when = new Date(data.generated_at).toLocaleString();
   const hot = data.excluded_hot.length ? ` Excluded (up >30% in a month): ${data.excluded_hot.join(", ")}.` : "";
   signalsEls.footer.textContent =
-    `Scanned ${data.scanned} liquid US stocks, deep-checked the ${data.deep_checked} with the best volume / relative-strength setups. ` +
+    `Scanned ${data.scanned} liquid US stocks, deep-checked the ${data.deep_checked} with the best volume / relative-strength scores. Radar covers these candidates, not the entire market. ` +
     `Updated ${when}; results are cached for an hour.${hot}`;
 }
 
@@ -1438,196 +1629,11 @@ signalsEls.promptBtn.addEventListener("click", async () => {
   setTimeout(() => (signalsEls.promptBtn.textContent = original), 2000);
 });
 
-// ---- Backtest ----
-
-const btEls = {
-  form: document.getElementById("bt-form"),
-  period: document.getElementById("bt-period"),
-  entry: document.getElementById("bt-entry"),
-  exit: document.getElementById("bt-exit"),
-  minScore: document.getElementById("bt-min-score"),
-  maxHold: document.getElementById("bt-max-hold"),
-  cost: document.getElementById("bt-cost"),
-  runBtn: document.getElementById("bt-run-btn"),
-  status: document.getElementById("bt-status"),
-  results: document.getElementById("bt-results"),
-};
-
-const EXIT_LABELS = {
-  target: "Take profit",
-  target_gap: "Gapped above target",
-  stop: "Stop loss",
-  stop_gap: "Gapped below stop",
-  trail_stop: "Trailing stop",
-  time: "Max hold reached",
-  open: "Still open",
-};
-
-let backtestLoaded = false;
-let backtestSeq = 0;
-
-function fmtR(value) {
-  if (value == null) return "—";
-  return `${value > 0 ? "+" : ""}${Number(value).toFixed(2)}R`;
-}
-
-function btTile(label, value, cls = "", hint = "") {
-  return `<div class="bt-tile"><span class="bt-tile-label">${escapeHtml(label)}</span>
-    <span class="bt-tile-value ${cls}">${value}</span>${hint ? `<span class="bt-tile-hint">${escapeHtml(hint)}</span>` : ""}</div>`;
-}
-
-// One plain-language takeaway, so the numbers lead to a decision
-function btVerdict(data) {
-  const o = data.overall;
-  const buy = data.signal_study.by_action.BUY;
-  const hold = data.signal_study.by_action.HOLD;
-  if (!o.trades) return "No trades were triggered — try a lower minimum score or a longer period.";
-  const lines = [];
-  if (o.trades < 30) lines.push(`Only ${o.trades} trades — too few to trust; add more symbols or a longer period.`);
-  lines.push(
-    o.expectancy_r > 0
-      ? `Positive edge: each trade made ${fmtR(o.expectancy_r)} on average (profit factor ${o.profit_factor ?? "—"}).`
-      : `No edge: each trade averaged ${fmtR(o.expectancy_r)}.`,
-  );
-  if (buy && hold && buy.avg_20d != null && hold.avg_20d != null) {
-    lines.push(
-      buy.avg_20d > hold.avg_20d
-        ? `BUY days beat HOLD days over the next 20 days (${formatPct(buy.avg_20d)} vs ${formatPct(hold.avg_20d)}), so the score adds information.`
-        : `BUY days did worse than HOLD days over the next 20 days (${formatPct(buy.avg_20d)} vs ${formatPct(hold.avg_20d)}), so the score isn't picking better moments than chance.`,
-    );
-  }
-  const beaten = data.symbols.filter((s) => s.buy_hold_pct != null && s.strategy_return_pct < s.buy_hold_pct).length;
-  if (beaten) lines.push(`Buying and holding beat the strategy on ${beaten} of ${data.symbols.length} symbols.`);
-  return lines.join(" ");
-}
-
-function studyRows(groups, labelFn) {
-  // Integer-like keys ("-6", "3") lose their order in JS objects; sort numerically
-  return Object.entries(groups)
-    .sort(([a], [b]) => (Number.isNaN(+a) ? 0 : +a - +b))
-    .map(([name, g]) => `<tr><td>${escapeHtml(labelFn(name))}</td><td>${g.days}</td>
-      ${[5, 20, 60].map((d) => `<td class="${pctClass(g[`avg_${d}d`])}">${formatPct(g[`avg_${d}d`])}</td><td>${g[`pos_${d}d`] == null ? "—" : `${g[`pos_${d}d`]}%`}</td>`).join("")}</tr>`)
-    .join("");
-}
-
-function renderBacktest(data) {
-  const o = data.overall;
-  const studyHead = `<tr><th></th><th>Days</th>${[5, 20, 60].map((d) => `<th>Avg ${d}d</th><th>% up</th>`).join("")}</tr>`;
-  const symbols = data.symbols
-    .map((s) => `<tr>
-      <td><button type="button" class="link-btn bt-symbol" data-symbol="${escapeHtml(s.symbol)}">${escapeHtml(s.symbol)}</button></td>
-      <td>${escapeHtml(s.from)} → ${escapeHtml(s.to)}</td>
-      <td>${s.summary.trades}</td>
-      <td>${s.summary.trades ? `${s.summary.win_rate}%` : "—"}</td>
-      <td class="${pctClass(s.summary.expectancy_r)}">${fmtR(s.summary.expectancy_r)}</td>
-      <td class="${pctClass(s.strategy_return_pct)}">${formatPct(s.strategy_return_pct)}</td>
-      <td class="${pctClass(s.buy_hold_pct)}">${formatPct(s.buy_hold_pct)}</td></tr>`)
-    .join("");
-  const trades = data.trades
-    .slice(-50)
-    .reverse()
-    .map((t) => `<tr>
-      <td>${escapeHtml(t.symbol)}</td><td>${escapeHtml(t.entry_date)}</td><td>${t.score}</td>
-      <td>${formatMoney(t.entry)}</td><td>${formatMoney(t.stop)}</td><td>${t.target == null ? "trail" : formatMoney(t.target)}</td>
-      <td>${escapeHtml(t.exit_date)}</td><td>${formatMoney(t.exit)}</td>
-      <td>${escapeHtml(EXIT_LABELS[t.reason] || t.reason)}</td><td>${t.days}</td>
-      <td class="${pctClass(t.r)}">${fmtR(t.r)}</td></tr>`)
-    .join("");
-  const errors = Object.entries(data.errors)
-    .map(([sym, err]) => `${sym}: ${err}`)
-    .join("; ");
-
-  btEls.results.innerHTML = `
-    <p class="bt-verdict">${escapeHtml(btVerdict(data))}</p>
-    <div class="bt-tiles">
-      ${btTile("Trades", o.trades ?? 0, "", o.avg_days ? `avg ${o.avg_days} days held` : "")}
-      ${btTile("Win rate", o.trades ? `${o.win_rate}%` : "—")}
-      ${btTile("Expectancy", fmtR(o.expectancy_r), pctClass(o.expectancy_r), "average R per trade")}
-      ${btTile("Avg win / loss", o.trades ? `${fmtR(o.avg_win_r)} / ${fmtR(o.avg_loss_r)}` : "—")}
-      ${btTile("Profit factor", o.profit_factor ?? "—", "", "gross wins ÷ gross losses")}
-      ${btTile("Max drawdown", o.trades ? `−${o.max_drawdown_r}R` : "—", "down", "worst peak-to-trough")}
-      ${btTile("Account at 1% risk", formatPct(o.return_at_1pct_risk), pctClass(o.return_at_1pct_risk), "risking 1% per trade")}
-      ${btTile("SPY buy & hold", formatPct(data.benchmark_buy_hold_pct), pctClass(data.benchmark_buy_hold_pct), "same window")}
-    </div>
-    ${o.exits ? `<p class="muted bt-exits">Exits: ${Object.entries(o.exits).map(([k, v]) => `${escapeHtml(EXIT_LABELS[k] || k)} ${v}`).join(" · ")}</p>` : ""}
-
-    <h3 class="bt-h3">Does the score predict returns?</h3>
-    <p class="muted bt-note">Average move after every past day, grouped by what the app said that day. A useful signal shows BUY above HOLD above SELL, and higher scores above lower ones.</p>
-    <div class="bt-table-wrap"><table class="bt-table">
-      <thead>${studyHead}</thead>
-      <tbody>${studyRows(data.signal_study.by_action, (n) => n)}</tbody>
-      <tbody class="bt-score-rows">${studyRows(data.signal_study.by_score, (n) => `Score ${n > 0 ? "+" : ""}${n}`)}</tbody>
-    </table></div>
-
-    <h3 class="bt-h3">By symbol</h3>
-    <div class="bt-table-wrap"><table class="bt-table">
-      <thead><tr><th>Symbol</th><th>Tested</th><th>Trades</th><th>Win rate</th><th>Expectancy</th><th>Strategy</th><th>Buy &amp; hold</th></tr></thead>
-      <tbody>${symbols}</tbody>
-    </table></div>
-
-    <h3 class="bt-h3">Latest trades</h3>
-    <div class="bt-table-wrap"><table class="bt-table">
-      <thead><tr><th>Symbol</th><th>Entry</th><th>Score</th><th>Entry $</th><th>Stop</th><th>Target</th><th>Exit</th><th>Exit $</th><th>Reason</th><th>Days</th><th>R</th></tr></thead>
-      <tbody>${trades || `<tr><td colspan="11" class="muted">No trades.</td></tr>`}</tbody>
-    </table></div>
-    ${errors ? `<p class="muted bt-note">Skipped: ${escapeHtml(errors)}</p>` : ""}`;
-
-  btEls.results.querySelectorAll(".bt-symbol").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      history.replaceState(null, "", location.pathname);
-      showView("dashboard");
-      openStock(btn.dataset.symbol);
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    });
-  });
-}
-
-async function runBacktest() {
-  const seq = ++backtestSeq;
-  backtestLoaded = true;
-  btEls.runBtn.disabled = true;
-  btEls.status.textContent = "Replaying past data for your watchlist… this can take up to a minute.";
-  const params = new URLSearchParams({
-    period: btEls.period.value,
-    entry: btEls.entry.value,
-    exit: btEls.exit.value,
-    min_score: btEls.minScore.value,
-    max_hold: btEls.maxHold.value,
-    cost_bps: btEls.cost.value,
-  });
-  try {
-    const data = await fetchJson(`${API}/backtest?${params}${symbolsQuery("&")}`);
-    if (seq !== backtestSeq) return;
-    btEls.status.textContent = `Tested ${data.symbols.length} symbols.`;
-    renderBacktest(data);
-  } catch (err) {
-    if (seq !== backtestSeq) return;
-    backtestLoaded = false;
-    btEls.status.textContent = `Backtest failed: ${err.message}`;
-  } finally {
-    if (seq === backtestSeq) btEls.runBtn.disabled = false;
-  }
-}
-
-btEls.form.addEventListener("submit", (e) => {
-  e.preventDefault();
-  runBacktest();
-});
-
-// ---- Position sizing + trade journal ----
-// Stored in this browser (the free host has no disk); Export/Import moves it.
+// ---- Position sizing and paper-order storage ----
+// Retain the existing storage key to preserve saved settings and paper orders.
 
 const JOURNAL_KEY = "trader-journal";
 
-const jEls = {
-  status: document.getElementById("journal-status"),
-  summary: document.getElementById("journal-summary"),
-  open: document.getElementById("journal-open"),
-  closed: document.getElementById("journal-closed"),
-  refreshBtn: document.getElementById("journal-refresh-btn"),
-  exportBtn: document.getElementById("journal-export-btn"),
-  importInput: document.getElementById("journal-import"),
-};
 
 function todayIso() {
   const d = new Date();
@@ -1649,14 +1655,11 @@ function loadJournal() {
 }
 
 let journal = loadJournal();
-let journalMarks = {};
-let journalSeq = 0;
 
 // Another tab changed the journal: reload so this tab doesn't overwrite it
 window.addEventListener("storage", (e) => {
   if (e.key !== JOURNAL_KEY) return;
   journal = loadJournal();
-  if (!document.getElementById("view-journal").classList.contains("hidden")) refreshJournal();
 });
 
 function saveJournal() {
@@ -1664,7 +1667,7 @@ function saveJournal() {
     localStorage.setItem(JOURNAL_KEY, JSON.stringify(journal));
     return true;
   } catch {
-    jEls.status.textContent = "Could not save — browser storage is unavailable. Export to keep your data.";
+    els.planMessage.textContent = "Could not save settings: browser storage is unavailable.";
     return false;
   }
 }
@@ -1784,16 +1787,6 @@ function newTradeFromPlan(action) {
   };
 }
 
-els.logTradeBtn.addEventListener("click", () => {
-  const trade = newTradeFromPlan("logged");
-  if (!trade) return;
-  journal.trades.push(trade);
-  if (saveJournal()) {
-    els.planMessage.textContent = `Logged ${plural(trade.shares, "share")} of ${trade.symbol} at ${formatMoney(trade.entry)} — see the Journal tab.`;
-    els.inputNotes.value = "";
-  }
-});
-
 // ---- Alpaca paper trading ----
 
 let brokerEnabled = false;
@@ -1815,8 +1808,6 @@ async function loadBrokerStatus() {
       els.brokerInfo.textContent = /not configured/.test(status.reason || "") ? "" : `Paper trading off: ${status.reason}`;
     }
     els.brokerInfo.classList.toggle("hidden", !els.brokerInfo.textContent);
-    // The journal may have rendered before we knew Alpaca was available
-    if (brokerEnabled && !document.getElementById("view-journal").classList.contains("hidden")) refreshJournal();
   } catch {
     brokerEnabled = false;
   }
@@ -1846,7 +1837,7 @@ els.paperOrderBtn.addEventListener("click", async () => {
     saveJournal();
     els.planMessage.textContent =
       `Paper order sent: buy ${plural(trade.shares, "share")} of ${trade.symbol} at ${formatMoney(trade.entry)} limit, ` +
-      `stop ${formatMoney(trade.stop)} arms when it fills. Track it in the Journal tab.`;
+      `stop ${formatMoney(trade.stop)} arms when it fills. Manage this order in your Alpaca paper account.`;
     els.inputNotes.value = "";
   } catch (err) {
     els.planMessage.textContent = `Order not placed: ${err.message}`;
@@ -1886,347 +1877,8 @@ function applyBrokerState(t, s) {
   }
 }
 
-async function syncBroker() {
-  const live = journal.trades.filter((t) => t.broker && ["pending", "filled"].includes(t.broker.status));
-  if (!brokerEnabled || !live.length) return null;
-  const res = await postJson(`${API}/broker/sync`, {
-    trades: live.map((t) => ({ trade_id: t.id, order_id: t.broker.orderId, exit_order_id: t.broker.exitOrderId ?? null })),
-  });
-  for (const t of live) if (res.trades[t.id]) applyBrokerState(t, res.trades[t.id]);
-  saveJournal();
-  return live.filter((t) => t.broker.error).length;
-}
-
-// ---- Journal view ----
-
-const brokerState = (t) => t.broker?.status;
-const pendingTrades = () => journal.trades.filter((t) => ["pending", "cancelled"].includes(brokerState(t)));
-const openTrades = () => journal.trades.filter((t) => t.exit == null && !["pending", "cancelled"].includes(brokerState(t)));
-const closedTrades = () => journal.trades.filter((t) => t.exit != null);
-
-function tradeR(t, price) {
-  return (price - t.entry) / (t.entry - t.stop);
-}
-
-function renderJournalSummary(review) {
-  const s = review?.stats;
-  const d = review?.discipline;
-  if (!s || !s.trades) {
-    jEls.summary.innerHTML = `<p class="muted bt-note">Close a few trades to see your stats here.</p>`;
-    return;
-  }
-  const lines = [];
-  if (s.trades < 20) lines.push(`${plural(s.trades, "closed trade")} so far — stats get meaningful after about 20.`);
-  lines.push(`Your trades average ${fmtR(s.expectancy_r)} each${s.expectancy_r > 0 ? "" : " — no edge yet"}.`);
-  if (d.on_signal.trades && d.off_signal.trades) {
-    lines.push(
-      `Trades taken on a BUY signal averaged ${fmtR(d.on_signal.expectancy_r)} vs ${fmtR(d.off_signal.expectancy_r)} for the rest.`,
-    );
-  }
-  if (d.blown_stops) {
-    lines.push(`${d.blown_stops} trade${d.blown_stops > 1 ? "s" : ""} lost well past the stop, costing an extra ${fmtR(d.blown_stop_r)}.`);
-  }
-  jEls.summary.innerHTML = `
-    <p class="bt-verdict">${escapeHtml(lines.join(" "))}</p>
-    <div class="bt-tiles">
-      ${btTile("Closed trades", s.trades, "", `avg ${s.avg_days} days held`)}
-      ${btTile("Win rate", `${s.win_rate}%`)}
-      ${btTile("Expectancy", fmtR(s.expectancy_r), pctClass(s.expectancy_r), "average R per trade")}
-      ${btTile("Avg win / loss", `${fmtR(s.avg_win_r)} / ${fmtR(s.avg_loss_r)}`)}
-      ${btTile("Total P/L", formatSignedMoney(s.total_pnl), pctClass(s.total_pnl))}
-      ${btTile("Max drawdown", `−${s.max_drawdown_r}R`, "down", "worst peak-to-trough")}
-      ${btTile("On a BUY signal", `${d.on_signal_pct}%`, "", "share of your trades")}
-      ${btTile("Blown stops", d.blown_stops, d.blown_stops ? "down" : "", "lost more than 1.2R")}
-    </div>`;
-}
-
-const paperTag = (t) => (t.broker ? ` <span class="j-paper" title="Alpaca paper order">paper</span>` : "");
-
-// Two clicks instead of a confirm() dialog
-function armedButton(cls, label) {
-  return `<button type="button" class="${cls}" data-label="${escapeHtml(label)}">${escapeHtml(label)}</button>`;
-}
-
-function pendingRow(t) {
-  const cancelled = brokerState(t) === "cancelled";
-  const ageDays = Math.round((Date.parse(todayIso()) - Date.parse(t.entryDate)) / 86400000);
-  // The backtest only waits 10 trading days (~2 weeks) for the buy zone to fill
-  const stale = !cancelled && ageDays > 14;
-  const status = t.broker.error
-    ? `<span class="j-alert" title="${escapeHtml(t.broker.error)}">sync failed</span>`
-    : cancelled
-      ? `<span class="muted">Order cancelled</span>`
-      : `<span class="muted">Limit order pending${ageDays ? ` · ${plural(ageDays, "day")}` : ""}</span>` +
-        (stale ? `<br><span class="j-warn">Past the backtest's 2-week window — consider cancelling</span>` : "");
-  return `<tr data-id="${escapeHtml(t.id)}" class="${cancelled ? "j-dim" : ""}">
-    <td>${escapeHtml(t.symbol)}${paperTag(t)}</td><td>${escapeHtml(t.entryDate)}</td><td>${formatMoney(t.entry)}</td>
-    <td>${t.shares}</td><td>${formatMoney(t.stop)}</td><td>—</td><td>—</td><td>—</td><td>—</td>
-    <td>${status}</td>
-    <td class="j-actions">${cancelled ? armedButton("link-btn j-delete", "Delete") : armedButton("secondary j-cancel-order", "Cancel order")}</td></tr>`;
-}
-
-function openRow(t) {
-  const m = journalMarks[t.id];
-  const ok = m && !m.error;
-  const price = ok ? m.price : null;
-  const b = t.broker;
-  let status = !m
-    ? `<span class="muted">…</span>`
-    : m.error
-      ? `<span class="muted" title="${escapeHtml(m.error)}">no data</span>`
-      : m.stop_hit
-        ? `<span class="j-alert">Trail stop hit ${escapeHtml(m.stop_hit.date)} at ${formatMoney(m.stop_hit.stop)} — exit</span>`
-        : `<span class="j-ok">Hold · locks ${fmtR(m.locked_r)}</span>`;
-  let actions;
-  if (b) {
-    if (b.error) status += `<br><span class="j-alert" title="${escapeHtml(b.error)}">Alpaca sync failed</span>`;
-    if (b.exitOrderId) {
-      status = `<span class="muted">Sell order sent — waiting for fill</span>`;
-      actions = "";
-    } else {
-      if (b.stopPrice != null) status += `<br><span class="muted">Alpaca stop ${formatMoney(b.stopPrice)}</span>`;
-      const canRaise = ok && !m.stop_hit && b.stopOrderId && m.trail_stop > (b.stopPrice ?? 0) + 0.005;
-      actions =
-        (canRaise
-          ? `<button type="button" class="secondary j-raise-stop" data-stop="${m.trail_stop}">Raise stop → ${formatMoney(m.trail_stop)}</button>`
-          : "") + armedButton("secondary j-sell", "Sell at market");
-    }
-  } else {
-    actions = `
-      <span class="j-close-form hidden">
-        <input type="number" class="j-exit-price" step="0.01" min="0" value="${m?.stop_hit ? m.stop_hit.stop : price ?? ""}" aria-label="Exit price">
-        <input type="date" class="j-exit-date" value="${m?.stop_hit ? m.stop_hit.date : todayIso()}" aria-label="Exit date">
-        <button type="button" class="j-confirm-close">Save</button>
-      </span>
-      <button type="button" class="secondary j-close">Close</button>
-      ${armedButton("link-btn j-delete", "Delete")}`;
-  }
-  return `<tr data-id="${escapeHtml(t.id)}">
-    <td>${escapeHtml(t.symbol)}${paperTag(t)}</td><td>${escapeHtml(t.entryDate)}</td><td>${formatMoney(t.entry)}</td>
-    <td>${t.shares}</td><td>${formatMoney(t.stop)}</td>
-    <td>${price != null ? formatMoney(price) : "—"}</td>
-    <td>${ok ? formatMoney(m.trail_stop) : "—"}</td>
-    <td class="${pctClass(m?.open_r)}">${ok ? fmtR(m.open_r) : "—"}</td>
-    <td class="${pctClass(price != null ? price - t.entry : null)}">${price != null ? formatSignedMoney((price - t.entry) * t.shares) : "—"}</td>
-    <td>${status}</td>
-    <td class="j-actions">${actions}</td></tr>`;
-}
-
-function renderJournalTables() {
-  const rows = [...openTrades().map(openRow), ...pendingTrades().map(pendingRow)];
-  jEls.open.innerHTML = rows.length
-    ? rows.join("")
-    : `<tr><td colspan="11" class="muted">No open trades. Log one or place a paper order from the order plan on the dashboard.</td></tr>`;
-
-  const closed = closedTrades().sort((a, b) => (a.exitDate < b.exitDate ? 1 : -1));
-  jEls.closed.innerHTML = closed.length
-    ? closed
-        .map((t) => {
-          const r = tradeR(t, t.exit);
-          const action = t.signal?.action;
-          return `<tr data-id="${escapeHtml(t.id)}">
-            <td>${escapeHtml(t.symbol)}${paperTag(t)}</td><td>${escapeHtml(t.entryDate)}</td><td>${escapeHtml(t.exitDate)}</td>
-            <td>${formatMoney(t.entry)}</td><td>${formatMoney(t.exit)}</td><td>${t.shares}</td>
-            <td class="${pctClass(r)}">${fmtR(r)}</td>
-            <td class="${pctClass(t.exit - t.entry)}">${formatSignedMoney((t.exit - t.entry) * t.shares)}</td>
-            <td><span class="j-signal ${(action || "none").toLowerCase()}">${escapeHtml(action || "—")}${t.signal?.score != null ? ` ${t.signal.score > 0 ? "+" : ""}${t.signal.score}` : ""}</span></td>
-            <td class="j-notes" title="${escapeHtml(t.notes || "")}">${escapeHtml(t.notes || "")}</td>
-            <td class="j-actions">${t.broker ? "" : `<button type="button" class="link-btn j-reopen">Reopen</button>`}${armedButton("link-btn j-delete", "Delete")}</td></tr>`;
-        })
-        .join("")
-    : `<tr><td colspan="11" class="muted">No closed trades yet.</td></tr>`;
-}
-
-async function refreshJournal() {
-  const seq = ++journalSeq;
-  renderJournalTables();
-  let syncNote = "";
-  try {
-    const failed = await syncBroker();
-    if (failed) syncNote = ` ${plural(failed, "paper order")} couldn't be synced.`;
-  } catch (err) {
-    syncNote = ` Alpaca sync failed: ${err.message}`;
-  }
-  if (seq !== journalSeq) return;
-  renderJournalTables();
-  const open = openTrades();
-  const closed = closedTrades();
-  if (!open.length && !closed.length) {
-    renderJournalSummary(null);
-    jEls.status.textContent = syncNote.trim();
-    return;
-  }
-  jEls.status.textContent = open.length ? "Updating prices and trailing stops…" : "";
-  try {
-    const review = await postJson(`${API}/journal/review`, {
-      open: open.map((t) => ({ id: t.id, symbol: t.symbol, entry_date: t.entryDate, entry_price: t.entry, initial_stop: t.stop })),
-      closed: closed.map((t) => ({
-        symbol: t.symbol,
-        entry_date: t.entryDate,
-        exit_date: t.exitDate,
-        entry_price: t.entry,
-        initial_stop: t.stop,
-        exit_price: t.exit,
-        shares: t.shares,
-        signal_action: t.signal?.action ?? null,
-      })),
-    });
-    if (seq !== journalSeq) return;
-    journalMarks = review.marks;
-    renderJournalSummary(review);
-    renderJournalTables();
-    const hits = Object.values(review.marks).filter((m) => m.stop_hit).length;
-    jEls.status.textContent =
-      (hits
-        ? `${hits} open trade${hits > 1 ? "s have" : " has"} hit the trailing stop — close ${hits > 1 ? "them" : "it"} to follow the system.`
-        : open.length
-          ? `Updated ${new Date().toLocaleTimeString()}.`
-          : "") + syncNote;
-  } catch (err) {
-    if (seq !== journalSeq) return;
-    jEls.status.textContent = `Review failed: ${err.message}`;
-  }
-}
-
-function tradeById(id) {
-  return journal.trades.find((t) => t.id === id);
-}
-
-// First click arms the button; a second click within 3 s confirms
-function confirmed(btn) {
-  if (btn.dataset.armed) return true;
-  btn.dataset.armed = "1";
-  btn.textContent = `Sure? ${btn.dataset.label}`;
-  setTimeout(() => {
-    delete btn.dataset.armed;
-    btn.textContent = btn.dataset.label;
-  }, 3000);
-  return false;
-}
-
-async function brokerAction(btn, fn) {
-  btn.disabled = true;
-  try {
-    await fn();
-  } catch (err) {
-    jEls.status.textContent = `Alpaca: ${err.message}`;
-  } finally {
-    btn.disabled = false;
-  }
-  saveJournal();
-  refreshJournal();
-}
-
-function onJournalClick(e) {
-  const btn = e.target.closest("button");
-  const row = e.target.closest("tr[data-id]");
-  if (!btn || !row) return;
-  const trade = tradeById(row.dataset.id);
-  if (!trade) return;
-
-  if (btn.classList.contains("j-close")) {
-    row.querySelector(".j-close-form").classList.toggle("hidden");
-    btn.textContent = btn.textContent === "Close" ? "Cancel" : "Close";
-  } else if (btn.classList.contains("j-confirm-close")) {
-    const price = Number(row.querySelector(".j-exit-price").value);
-    const exitDate = row.querySelector(".j-exit-date").value;
-    if (!(price > 0) || !exitDate || exitDate < trade.entryDate || exitDate > todayIso()) {
-      jEls.status.textContent = "Enter an exit price and a date between the entry date and today.";
-      return;
-    }
-    Object.assign(trade, { exit: price, exitDate });
-    saveJournal();
-    refreshJournal();
-  } else if (btn.classList.contains("j-reopen")) {
-    delete trade.exit;
-    delete trade.exitDate;
-    saveJournal();
-    refreshJournal();
-  } else if (btn.classList.contains("j-delete")) {
-    if (!confirmed(btn)) return;
-    journal.trades = journal.trades.filter((t) => t.id !== trade.id);
-    saveJournal();
-    refreshJournal();
-  } else if (btn.classList.contains("j-cancel-order")) {
-    if (!confirmed(btn)) return;
-    brokerAction(btn, async () => {
-      await postJson(`${API}/broker/cancel`, { order_id: trade.broker.orderId });
-      jEls.status.textContent = `Cancel sent for ${trade.symbol}.`;
-    });
-  } else if (btn.classList.contains("j-raise-stop")) {
-    brokerAction(btn, async () => {
-      const leg = await postJson(`${API}/broker/stop`, {
-        stop_order_id: trade.broker.stopOrderId,
-        stop_price: Number(btn.dataset.stop),
-      });
-      Object.assign(trade.broker, { stopOrderId: leg.id, stopPrice: leg.stop_price });
-      jEls.status.textContent = `${trade.symbol} stop raised to ${formatMoney(leg.stop_price)} at Alpaca.`;
-    });
-  } else if (btn.classList.contains("j-sell")) {
-    if (!confirmed(btn)) return;
-    brokerAction(btn, async () => {
-      const order = await postJson(`${API}/broker/close`, {
-        trade_id: trade.id,
-        symbol: trade.symbol,
-        qty: trade.shares,
-        stop_order_id: trade.broker.stopOrderId ?? null,
-      });
-      trade.broker.exitOrderId = order.id;
-      jEls.status.textContent = `Market sell sent for ${trade.symbol}; it fills at the next market price.`;
-    });
-  }
-}
-
-jEls.open.addEventListener("click", onJournalClick);
-jEls.closed.addEventListener("click", onJournalClick);
-jEls.refreshBtn.addEventListener("click", refreshJournal);
-
-jEls.exportBtn.addEventListener("click", () => {
-  const blob = new Blob([JSON.stringify(journal, null, 2)], { type: "application/json" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `trader-journal-${todayIso()}.json`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-});
-
-function validImportedTrade(t) {
-  const num = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
-  const day = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
-  return (
-    t && typeof t.id === "string" && t.id.length <= 64 &&
-    typeof t.symbol === "string" && /^[A-Za-z0-9.^=-]{1,20}$/.test(t.symbol) && day(t.entryDate) &&
-    num(t.entry) && num(t.shares) && num(t.stop) && t.stop < t.entry &&
-    (t.exit == null || (num(t.exit) && day(t.exitDate)))
-  );
-}
-
-jEls.importInput.addEventListener("change", async () => {
-  const file = jEls.importInput.files[0];
-  jEls.importInput.value = "";
-  if (!file) return;
-  try {
-    const data = JSON.parse(await file.text());
-    const incoming = Array.isArray(data?.trades) ? data.trades : [];
-    const valid = incoming.filter(validImportedTrade);
-    // Merge by id so importing the same backup twice doesn't duplicate trades
-    const known = new Set(journal.trades.map((t) => t.id));
-    const added = valid.filter((t) => !known.has(t.id));
-    journal.trades.push(...added);
-    if (!journal.settings.account && data.settings?.account) journal.settings = { ...journal.settings, ...data.settings };
-    saveJournal();
-    jEls.status.textContent =
-      `Imported ${added.length} trade${added.length === 1 ? "" : "s"}` +
-      (valid.length > added.length ? ` (${valid.length - added.length} already here)` : "") +
-      (incoming.length > valid.length ? `; skipped ${incoming.length - valid.length} invalid` : "") +
-      ".";
-    refreshJournal();
-  } catch {
-    jEls.status.textContent = "Import failed: that file isn't a journal export.";
-  }
-});
-
 async function init() {
+  checkSetupAlerts();
   showView(location.hash.slice(1));
   try {
     const [items] = await Promise.all([

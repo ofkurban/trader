@@ -26,6 +26,7 @@ from backend.cache import ttl_cache
 from backend.config import WATCHLIST
 from backend.ladder import compute_ladder
 from backend.levels import compute_levels
+from backend.setups import compute_setup
 
 log = logging.getLogger("trader")
 
@@ -161,6 +162,7 @@ def updown_volume_ratio(close: pd.Series, volume: pd.Series, days: int = 50) -> 
 def _prescore(m: dict, spy: dict) -> float:
     """Cheap ranking used only to pick which names get the expensive fetches."""
     score = 0.0
+    score += {"near": 4.0, "forming": 3.0, "confirmed": 2.0, "pullback": 2.0}.get(m.get("setup_state"), 0)
     if m["vol_ratio"]:
         score += min(m["vol_ratio"], 3.0)
     if m["ret_1m"] is not None and spy.get("ret_1m") is not None:
@@ -464,6 +466,8 @@ def scan() -> dict:
         if m["ret_1m"] is not None and m["ret_1m"] > MAX_MONTH_GAIN:
             excluded_hot.append(symbol)
             continue
+        relative = m["ret_1m"] - spy["ret_1m"] >= .03 if m["ret_1m"] is not None and spy.get("ret_1m") is not None else None
+        m["setup_state"] = compute_setup(frames[symbol], relative)["state"]
         metrics[symbol] = m
 
     candidates = sorted(metrics, key=lambda s: _prescore(metrics[s], spy), reverse=True)[:CANDIDATES]
@@ -516,6 +520,7 @@ def scan() -> dict:
             "catalyst_date": signals["catalyst"]["date"],
             "risk": biggest_risk(m, f, signals),
             "ladder": _ladder_label(frames[symbol]),
+            "setup": compute_setup(frames[symbol], bool(signals["strength"]["hit"])),
         })
 
     results.sort(key=lambda r: r["score"], reverse=True)
@@ -523,6 +528,7 @@ def scan() -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "signals": [{"key": k, "label": label} for k, label in SIGNALS],
         "top": results[:TOP_N],
+        "radar": sorted(results, key=lambda r: ({"near": 0, "forming": 1, "confirmed": 2, "pullback": 3}.get(r["setup"]["state"], 4), -r["score"])),
         "scanned": len(metrics) + len(excluded_hot),
         "deep_checked": len(candidates),
         "excluded_hot": sorted(excluded_hot),

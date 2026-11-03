@@ -39,7 +39,7 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
 - Editable order plan (saved in browser local storage; checks stop < buy < take profit)
 - Yahoo responses cached in-process (prices 2 min, news 5 min) and fetched in parallel
 - Dashed lines on chart for each level
-- **Backtest** tab: replays the BUY score and suggested buy zone / stop / take profit
+- **Backtest API** (no longer shown as a tab): replays the BUY score and suggested buy zone / stop / take profit
   day by day (no look-ahead) and reports win rate, expectancy in R, profit factor,
   drawdown, buy & hold vs SPY, and forward returns by action and score — so you
   can see whether the signal actually has an edge before trusting it
@@ -49,24 +49,29 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
   halves. The backtest also favors a **4× ATR trailing stop** over a fixed take profit
 - **Position sizing** in the order plan: enter account size and risk % (default 1%) and
   it sizes shares as risk ÷ (entry − stop), warning when a plan breaks your rule
-- **Journal** tab: log trades from the order plan (with what the app said at the time),
-  track each open trade's 4× ATR trailing stop with a "stop hit" alert, and review closed
-  trades with the backtest's stats plus discipline checks (share taken on a BUY signal,
-  blown stops). Saved in the browser — Export/Import to back up or move devices
 - **Alpaca paper trading** (paper keys only — live keys are refused): "Place paper order"
-  sends a limit buy with a stop loss that arms on fill; the journal syncs fills and
-  stop-outs, offers "Raise stop → trail" to move the Alpaca stop up to the 4× ATR
-  trailing stop, and "Sell at market". On a public deploy this needs `APP_PASSWORD`
-  set, so strangers can't trade the account
+  sends a limit buy with a stop loss that arms on fill. Manage orders in your
+  Alpaca paper account. On a public deploy this needs `APP_PASSWORD` set, so
+  strangers can't trade the account.
+
+- **Top analysts** panel per stock: firms whose past calls on that stock were right at
+  least 80% of the time (70/90% selectable; 5+ graded calls), with their current rating,
+  price target and upside. A call is graded once it is a year old: a Buy is correct if
+  the stock beat SPY over the next 12 months, a Sell if it lagged. Also shows how often
+  targets were reached, and the "blind Buy" baseline — when that is high too, the firms
+  rode the stock more than they showed skill. Data: Yahoo rating history since ~2012,
+  targets adjusted for splits
 
 ## API
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/watchlist` | All watchlist symbols with levels |
-| `GET /api/early-signals[?refresh=true]` | Top 10 early-signal stocks (cached 1 h) |
+| `GET /api/early-signals[?refresh=true]` | Setup radar candidates and top 10 early-signal stocks (cached 1 h) |
+| `GET /api/setups?symbols=AAPL,MSFT` | Completed-bar setup monitoring for watched stocks (cached 5 min) |
 | `GET /api/backtest?symbols=&period=5y&entry=buy_zone&exit=trail&min_score=3&max_hold=250&cost_bps=5` | Replay the BUY signal + levels on past data (cached 1 h) |
 | `GET /api/stock/{symbol}?period=1y` | History + levels for one symbol (`3mo`, `6mo`, `1y`, `2y`, `5y`, `ytd`, `max`) |
+| `GET /api/stock/{symbol}/analysts?min_accuracy=0.8&min_calls=5` | Firms with a ≥80% correct track record on the stock + their current rating/target (cached 6 h) |
 | `POST /api/journal/review` | Trailing stops for open journal trades + stats for closed ones |
 | `POST /api/agent/chat/{symbol}` | Stock chat (used by the **Analyze setup** button) |
 | `POST /api/agent/analyze/{symbol}` | One-shot structured setup analysis |
@@ -149,6 +154,26 @@ Each stock page shows two panels under the recommendation:
   the stop, buy-zone risk/reward and data freshness.
 
 ## Early signals tab
+
+The tab now opens **Setup radar**, with filters for Forming, Near breakout,
+Confirmed, Pullback, Extended, Failed, Watch and Unavailable. Forming or nearby
+setups receive priority for the detailed fundamentals check. Cards show the
+trigger (prior 20-session high), invalidation (base low), distance, completed-bar
+date and missing checks. Forming bases have a range of at most 8% and sit above a
+rising 50-day average; Near breakout also requires relative strength and a trigger
+within 3%. Confirmed breakouts require 1.5x prior 20-session average volume. Recent
+qualifying breakouts retain their original base for ten sessions. These rules
+have **not** been backtested; the retained backtest API tests the separate BUY/HOLD/SELL system.
+
+**Watch setup** saves fixed trigger/invalidation levels in this browser. The app
+checks `/api/setups?symbols=AAPL,MSFT` every five minutes while open and on reopen,
+replaying up to 60 completed sessions to catch intervening failures. Remove and
+re-add a failed watch to arm a new setup. Watches are checked even after leaving
+the radar. Stale bars or data errors do not trigger alerts. Optional desktop
+notifications require HTTPS/localhost and browser permission; the in-app feed
+keeps 50 changes. Closing the app pauses checks. Stock charts show current setup
+levels and separate saved watched levels. The radar is cached for an hour; watched
+prices are cached for five minutes. This is a daily-close system, not live alerts.
 
 The **Early signals · Top 10** tab screens ~225 liquid US stocks (a built-in
 list plus Yahoo's growth / undervalued / most-active screens) for ten signals

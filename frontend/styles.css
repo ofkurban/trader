@@ -874,6 +874,41 @@ button:hover {
   color: var(--muted);
 }
 
+.analysts-section {
+  background: var(--surface2);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.analysts-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.analysts-header h3 {
+  margin: 0;
+}
+
+.analysts-header label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.analysts-section > p {
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.analysts-table .up { color: var(--green); }
+.analysts-table .down { color: var(--red); }
+.analysts-table .muted { color: var(--muted); }
+
 .news-section {
   background: var(--surface2);
   border-radius: 8px;
@@ -1358,6 +1393,27 @@ button:disabled {
 
 /* ---- Early signals ---- */
 
+.radar-filters { display: flex; flex-wrap: wrap; gap: .45rem; margin: 1rem 0; }
+.radar-filters .selected { outline: 2px solid var(--blue); outline-offset: 1px; }
+.radar-filters span { opacity: .7; margin-left: .3rem; }
+.radar-alerts { border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
+.radar-alerts p { font-size: .85rem; }
+#alerts-feed { max-height: 220px; overflow: auto; padding-left: 1.3rem; }
+#alerts-feed li { margin: .5rem 0; }
+.watched-setup { font-size: .85rem; padding: .3rem 0; }
+.setup-state { color: var(--blue); font-weight: 700; }
+.setup-state.confirmed, .setup-state.near { color: var(--green); }
+.setup-state.failed { color: #f07178; }
+.setup-state.extended { color: #ffcc66; }
+.setup-levels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; padding: .75rem 0; border-block: 1px solid var(--border); }
+.setup-levels span, .setup-levels strong { display: block; }
+.setup-levels span { color: var(--muted); font-size: .75rem; margin-bottom: .3rem; }
+.setup-caption { font-size: .8rem; margin: 0; line-height: 1.5; }
+.signal-card summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
+.signal-card details .signal-chips { margin-top: .5rem; }
+.signal-card-head { flex-wrap: wrap; }
+@media (max-width: 480px) { .setup-levels { grid-template-columns: 1fr; } }
+
 .signals-view {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1710,135 +1766,7 @@ button:disabled {
 }
 .verdict.hold { color: var(--muted); background: rgba(139, 156, 179, 0.15); }
 
-/* ---- Backtest ---- */
-
-.bt-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.75rem;
-  margin: 1rem 0 0.25rem;
-}
-
-.bt-form input {
-  width: 7rem;
-}
-
-.bt-form select {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  padding: 0.5rem 0.6rem;
-  font-size: 0.95rem;
-}
-
-.bt-verdict {
-  background: var(--surface2);
-  border-left: 3px solid var(--blue);
-  border-radius: 6px;
-  padding: 0.75rem 0.9rem;
-  margin: 0 0 1rem;
-  line-height: 1.45;
-}
-
-.bt-tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 140px), 1fr));
-  gap: 0.6rem;
-}
-
-.bt-tile {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0.65rem 0.75rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-}
-
-.bt-tile-label,
-.bt-tile-hint {
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-
-.bt-tile-value {
-  font-size: 1.25rem;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.bt-tile-value.up,
-.bt-table td.up {
-  color: var(--green);
-}
-
-.bt-tile-value.down,
-.bt-table td.down {
-  color: var(--red);
-}
-
-.bt-exits {
-  font-size: 0.85rem;
-  margin: 0.6rem 0 0;
-}
-
-.bt-h3 {
-  font-size: 1rem;
-  margin: 1.4rem 0 0.3rem;
-}
-
-.bt-note {
-  font-size: 0.85rem;
-  margin: 0 0 0.6rem;
-}
-
-.bt-table-wrap {
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.bt-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.85rem;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.bt-table th,
-.bt-table td {
-  padding: 0.4rem 0.65rem;
-  text-align: right;
-  border-bottom: 1px solid var(--border);
-}
-
-.bt-table th:first-child,
-.bt-table td:first-child {
-  text-align: left;
-}
-
-.bt-table th {
-  color: var(--muted);
-  font-weight: 500;
-  background: var(--surface2);
-}
-
-.bt-table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.bt-table .bt-score-rows tr:first-child td {
-  border-top: 2px solid var(--border);
-}
-
-.metric-trend .up { color: var(--green); }
-.metric-trend .down { color: var(--red); }
-
-/* ---- Position sizing + journal ---- */
+/* ---- Position sizing ---- */
 
 .sizing-row {
   margin-top: 0.75rem;
@@ -1852,97 +1780,6 @@ button:disabled {
 
 .form-actions {
   flex-wrap: wrap;
-}
-
-.import-btn {
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  background: var(--surface2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.55rem 1rem;
-  font-weight: 600;
-  font-size: 0.8333rem;
-  cursor: pointer;
-}
-
-.journal-view .disclaimer {
-  margin-top: 1rem;
-}
-
-.import-btn:hover {
-  filter: brightness(1.08);
-}
-
-.import-btn:focus-within {
-  outline: 2px solid var(--blue);
-}
-
-.j-alert {
-  color: var(--red);
-  font-weight: 600;
-}
-
-.j-ok {
-  color: var(--green);
-}
-
-.j-signal {
-  font-size: 0.75rem;
-  font-weight: 600;
-  padding: 0.1rem 0.45rem;
-  border-radius: 999px;
-  background: var(--surface2);
-  color: var(--muted);
-}
-
-.j-signal.buy {
-  color: var(--green);
-  background: rgba(61, 214, 140, 0.12);
-}
-
-.j-signal.sell {
-  color: var(--red);
-  background: rgba(240, 113, 120, 0.12);
-}
-
-.bt-table td.j-notes {
-  max-width: 16rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: left;
-  color: var(--muted);
-}
-
-.j-actions {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.j-actions button.secondary {
-  padding: 0.3rem 0.65rem;
-  font-size: 0.8rem;
-}
-
-.j-close-form {
-  display: inline-flex;
-  gap: 0.35rem;
-  align-items: center;
-}
-
-.j-close-form input {
-  width: 7.5rem;
-  padding: 0.3rem 0.45rem;
-  font-size: 0.85rem;
-}
-
-.j-close-form button {
-  padding: 0.3rem 0.65rem;
-  font-size: 0.8rem;
 }
 
 .sizing-info.over-rule {
